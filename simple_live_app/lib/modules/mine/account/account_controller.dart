@@ -7,6 +7,7 @@ import 'package:simple_live_app/app/utils.dart';
 import 'package:simple_live_app/routes/route_path.dart';
 import 'package:simple_live_app/services/bilibili_account_service.dart';
 import 'package:simple_live_app/services/douyin_account_service.dart';
+import 'package:simple_live_app/services/douyu_account_service.dart';
 import 'package:simple_live_core/simple_live_core.dart';
 
 class AccountController extends GetxController {
@@ -157,6 +158,74 @@ class AccountController extends GetxController {
                 }
                 DouyinAccountService.instance.setCookie(cookie);
                 SmartDialog.showToast("ttwid 已保存");
+              }
+            },
+            child: const Text("确定"),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void douyuTap() async {
+    if (DouyuAccountService.instance.hasCookie.value) {
+      var result = await Utils.showAlertDialog(
+        "确定要清除已导入的斗鱼 Cookie 吗？\n清除后将恢复为匿名（游客）方式观看。",
+        title: "清除配置",
+      );
+      if (result) {
+        DouyuAccountService.instance.clearCookie();
+        SmartDialog.showToast("已清除斗鱼 Cookie");
+      }
+    } else {
+      doDouyuCookieConfig();
+    }
+  }
+
+  void doDouyuCookieConfig() {
+    var savedCookie = DouyuAccountService.instance.cookie;
+    var controller = TextEditingController(text: savedCookie);
+
+    Get.dialog(
+      AlertDialog(
+        title: const Text("导入斗鱼登录 Cookie"),
+        content: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text(
+                "在已登录斗鱼的浏览器中打开斗鱼直播间，F12 → Network → 任意请求 → 复制完整 Cookie 请求头粘贴到这里。\n"
+                "Cookie 仅保存在本机，用于让斗鱼把你的账号设备标识(dy_did)带入播放请求，可能改善卡顿。",
+                style: TextStyle(fontSize: 12, color: Colors.grey),
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                controller: controller,
+                maxLines: 4,
+                decoration: const InputDecoration(
+                  hintText: "请粘贴完整 Cookie（含 dy_did=...）",
+                  border: OutlineInputBorder(),
+                ),
+              ),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Get.back(),
+            child: const Text("取消"),
+          ),
+          TextButton(
+            onPressed: () {
+              var input = controller.text.trim();
+              Get.back();
+              if (input.isEmpty) {
+                DouyuAccountService.instance.clearCookie();
+                SmartDialog.showToast("已恢复为匿名观看");
+              } else {
+                DouyuAccountService.instance.setCookie(input);
+                SmartDialog.showToast("斗鱼 Cookie 已保存");
               }
             },
             child: const Text("确定"),

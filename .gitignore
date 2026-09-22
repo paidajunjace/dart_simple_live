@@ -3,3 +3,6 @@ simple_live_tv_app/.vscode/settings.json
 
 # macOS Spotlight Search index file
 *.DS_Store
+
+# 注意：douyu_cookie_secret.dart 是占位文件(默认空字符串)，需纳入版本控制；
+# 真实 Cookie 由 CI 从 GitHub Secret(DOUYU_COOKIE) 注入，切勿把真实凭证写进此文件提交。

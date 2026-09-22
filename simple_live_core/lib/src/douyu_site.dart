@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:math';
 
+import 'package:dio/dio.dart';
 import 'package:simple_live_core/src/common/http_client.dart';
 import 'package:simple_live_core/src/danmaku/douyu_danmaku.dart';
 import 'package:simple_live_core/src/interface/live_danmaku.dart';
@@ -24,6 +25,9 @@ class DouyuSite implements LiveSite {
 
   @override
   String name = "斗鱼直播";
+
+  /// 用户从浏览器导入的登录 Cookie（含 dy_did 等），为空则用匿名方式观看
+  String cookie = "";
 
   @override
   LiveDanmaku getDanmaku() => DouyuDanmaku();
@@ -138,14 +142,88 @@ class DouyuSite implements LiveSite {
     var args = detail.data.toString();
     var data = quality.data as DouyuPlayData;
 
-    List<String> urls = [];
-    for (var item in data.cdns) {
-      var url = await getPlayUrl(detail.roomId, args, data.rate, item);
-      if (url.isNotEmpty) {
-        urls.add(url);
+    // 并行获取各 CDN 线路的播放地址
+    final fetched = await Future.wait(data.cdns.map((cdn) async {
+      try {
+        return await getPlayUrl(detail.roomId, args, data.rate, cdn);
+      } catch (_) {
+        return "";
+      }
+    }));
+    final lines = <_DouyuLine>[];
+    for (var i = 0; i < fetched.length; i++) {
+      if (fetched[i].isNotEmpty) {
+        lines.add(_DouyuLine(data.cdns[i], fetched[i]));
       }
     }
-    return LivePlayUrl(urls: urls);
+
+    // 实测各线路下载速度，从快到慢排序（对齐网页播放器自动选线），线路1=最快
+    if (lines.length > 1) {
+      final scores =
+          await Future.wait(lines.map((l) => _probeSpeedScore(l.url)));
+      if (scores.any((s) => s < 10000)) {
+        final order = List<int>.generate(lines.length, (i) => i)
+          ..sort((a, b) => scores[a].compareTo(scores[b]));
+        final sorted = <_DouyuLine>[for (final i in order) lines[i]];
+        lines
+          ..clear()
+          ..addAll(sorted);
+      }
+    }
+
+    // 最快线路的地址重新签一次，避免测速连接影响 token 新鲜度
+    if (lines.isNotEmpty) {
+      try {
+        final fresh =
+            await getPlayUrl(detail.roomId, args, data.rate, lines.first.cdn);
+        if (fresh.isNotEmpty) {
+          lines.first = _DouyuLine(lines.first.cdn, fresh);
+        }
+      } catch (_) {}
+    }
+
+    return LivePlayUrl(urls: lines.map((l) => l.url).toList());
+  }
+
+  static const int _kProbeBytes = 192 * 1024;
+
+  /// 测速评分：数字越小越快。<10000=可正常拉流；>=10000=慢/失败惩罚值；99999=完全失败
+  Future<double> _probeSpeedScore(String url) async {
+    final cancelToken = CancelToken();
+    try {
+      return await _probeDownload(url, cancelToken)
+          .timeout(const Duration(seconds: 4), onTimeout: () => 99999);
+    } catch (_) {
+      return 99999;
+    } finally {
+      if (!cancelToken.isCancelled) {
+        cancelToken.cancel();
+      }
+    }
+  }
+
+  Future<double> _probeDownload(String url, CancelToken cancelToken) async {
+    final sw = Stopwatch()..start();
+    var received = 0;
+    final response = await HttpClient.instance.dio.get<ResponseBody>(
+      url,
+      options: Options(
+        responseType: ResponseType.stream,
+        connectTimeout: const Duration(seconds: 2),
+        receiveTimeout: const Duration(seconds: 3),
+      ),
+      cancelToken: cancelToken,
+    );
+    await for (final chunk in response.data!.stream) {
+      received += chunk.length;
+      if (received >= _kProbeBytes || sw.elapsedMilliseconds > 2800) {
+        break;
+      }
+    }
+    if (received >= _kProbeBytes) {
+      return sw.elapsedMilliseconds.toDouble();
+    }
+    return 10000 + (1 - received / _kProbeBytes) * 10000;
   }
 
   Future<String> getPlayUrl(
@@ -162,6 +240,7 @@ class DouyuSite implements LiveSite {
         'referer': 'https://www.douyu.com/$roomId',
         'user-agent':
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36 Edg/114.0.1823.43",
+        if (cookie.isNotEmpty) 'cookie': cookie,
       },
       formUrlEncoded: true,
     );
@@ -205,6 +284,7 @@ class DouyuSite implements LiveSite {
         'referer': 'https://www.douyu.com/$roomId',
         'user-agent':
             'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36 Edg/114.0.1823.43',
+        if (cookie.isNotEmpty) 'cookie': cookie,
       },
     );
     String? showTime = h5RoomInfo["data"]?["show_time"]?.toString();
@@ -216,6 +296,7 @@ class DouyuSite implements LiveSite {
         'referer': 'https://www.douyu.com/$roomId',
         'user-agent':
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36 Edg/114.0.1823.43",
+        if (cookie.isNotEmpty) 'cookie': cookie,
       },
     );
     var crptext = json.decode(jsEncResult)["data"]["room$roomId"].toString();
@@ -249,7 +330,8 @@ class DouyuSite implements LiveSite {
       notice: "",
       status: roomInfo["show_status"] == 1 && roomInfo["videoLoop"] != 1,
       danmakuData: roomInfo["room_id"].toString(),
-      data: DouyuSign.getSign(crptext, roomInfo["room_id"].toString()),
+      data: DouyuSign.getSign(crptext, roomInfo["room_id"].toString(),
+        dyDid: _extractDyDid(),),
       url: "https://www.douyu.com/$roomId",
       isRecord: roomInfo["videoLoop"] == 1,
       showTime: showTime,
@@ -307,6 +389,14 @@ class DouyuSite implements LiveSite {
       roomInfo = result["room"];
     }
     return roomInfo;
+  }
+
+  /// 从用户 Cookie 中提取 dy_did；没有则返回 null，由 DouyuSign 回退到默认匿名 did
+  String? _extractDyDid() {
+    if (cookie.isEmpty) return null;
+    final reg = RegExp(r"dy_did=([^;\s]+)");
+    final m = reg.firstMatch(cookie);
+    return m?.group(1);
   }
 
   //生成指定长度的16进制随机字符串
@@ -385,6 +475,13 @@ class DouyuSite implements LiveSite {
     //尚不支持
     return Future.value([]);
   }
+}
+
+/// 斗鱼单条线路：CDN 名称 + 已签名的播放地址
+class _DouyuLine {
+  final String cdn;
+  final String url;
+  _DouyuLine(this.cdn, this.url);
 }
 
 class DouyuPlayData {

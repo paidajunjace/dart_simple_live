@@ -52,6 +52,10 @@ mixin PlayerMixin {
     if(Platform.isAndroid){
       await pp.setProperty('force-seekable', 'yes');
     }
+    // 直播流缓冲：默认缓冲偏小，网络轻微抖动就会表现为卡顿
+    await pp.setProperty('demuxer-readahead-secs', '10');
+    await pp.setProperty('cache', 'yes');
+    await pp.setProperty('cache-secs', '20');
   }
 
   /// 视频控制器

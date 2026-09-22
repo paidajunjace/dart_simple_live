@@ -134,6 +134,8 @@ Future initServices() async {
 
   Get.put(DouyinAccountService());
 
+  Get.put(DouyuAccountService());
+
   Get.put(SyncService());
 
   Get.put(FollowService());
