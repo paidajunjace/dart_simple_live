@@ -52,7 +52,7 @@ dependencies:
   permission_handler: ^12.0.1 #权限处理
   image_gallery_saver_plus: ^4.0.1 #图片保存到相册
   screen_brightness: ^2.1.7 #亮度控制
-  auto_orientation_v2: 2.4.0 #屏幕方向（锁版本：2.4.1+ 删掉 kotlin-android 插件声明导致 Kotlin 源码不编译）
+  auto_orientation_v2: 2.3.8 #屏幕方向（锁纯 Java 版：2.4.x 改 Kotlin 且缺 kotlin-android 声明/jvmTarget 不一致）
   wakelock_plus: ^1.4.0 #屏幕常亮
   file_picker: ^10.3.7 #文件选择
   window_manager: ^0.5.1 #窗口管理
