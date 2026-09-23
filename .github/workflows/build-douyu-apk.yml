@@ -62,6 +62,57 @@ jobs:
         working-directory: simple_live_app
         run: flutter pub get
 
+      # 自愈护栏：某些插件发布版删掉了 kotlin-android 声明却有 .kt 源码，导致 Java 找不到符号。
+      # 这里检测并补回，避免同类上游回归再次打断构建。
+      - name: Repair Android plugins missing kotlin-android
+        run: |
+          python3 - <<'RPY'
+          import json, os, glob
+          if not os.path.isfile('.flutter-plugins-dependencies'):
+              print('no plugin manifest; skip repair')
+              raise SystemExit(0)
+          meta = json.load(open('.flutter-plugins-dependencies'))
+          plugins = [a['path'] for a in meta['plugins'].get('android', [])]
+          fixed = []
+          for base in plugins:
+              adir = os.path.join(base, 'android')
+              if not os.path.isdir(adir):
+                  continue
+              has_kt = bool(glob.glob(adir + '/src/**/*.kt', recursive=True))
+              if not has_kt:
+                  continue
+              cands = [adir + '/build.gradle', adir + '/build.gradle.kts']
+              gpath = next((c for c in cands if os.path.isfile(c)), None)
+              if gpath is None:
+                  continue
+              txt = open(gpath, encoding='utf-8').read()
+              if 'kotlin-android' in txt or 'org.jetbrains.kotlin.android' in txt:
+                  continue
+              if gpath.endswith('.kts'):
+                  patched = txt.replace(
+                      "id('com.android.library')",
+                      "id('com.android.library')\n    id('org.jetbrains.kotlin.android')",
+                      1,
+                  )
+                  if patched == txt:
+                      patched = txt.replace(
+                          'id(\"com.android.library\")',
+                          'id(\"com.android.library\")\n    id(\"org.jetbrains.kotlin.android\")',
+                          1,
+                      )
+              else:
+                  patched = txt.replace(
+                      "apply plugin: 'com.android.library'",
+                      "apply plugin: 'com.android.library'\napply plugin: 'kotlin-android'",
+                      1,
+                  )
+              if patched != txt:
+                  open(gpath, 'w', encoding='utf-8').write(patched)
+                  fixed.append(os.path.relpath(gpath))
+          print('repaired plugins:', fixed if fixed else 'none needed')
+          RPY
+        working-directory: simple_live_app
+
       - name: Build APK (split per ABI)
         working-directory: simple_live_app
         run: flutter build apk --release --split-per-abi
