@@ -52,10 +52,13 @@ mixin PlayerMixin {
     if(Platform.isAndroid){
       await pp.setProperty('force-seekable', 'yes');
     }
-    // 直播流缓冲：默认缓冲偏小，网络轻微抖动就会表现为卡顿
-    await pp.setProperty('demuxer-readahead-secs', '10');
+    // 直播流缓冲：预读保留抗网络抖动，但封顶缓冲并丢弃已播数据，
+    // 否则直播场景下延迟与内存会持续累积，几分钟后表现为卡住
+    await pp.setProperty('demuxer-readahead-secs', '5');
     await pp.setProperty('cache', 'yes');
-    await pp.setProperty('cache-secs', '20');
+    await pp.setProperty('cache-secs', '10');
+    await pp.setProperty('demuxer-max-bytes', '32768KiB');
+    await pp.setProperty('demuxer-max-back-bytes', '0');
   }
 
   /// 视频控制器
@@ -695,6 +698,7 @@ class PlayerController extends BaseController
       if (event) {
         WakelockPlus.enable();
         Log.d("Playing");
+        onPlaybackResumed();
       }
     });
 
@@ -737,6 +741,9 @@ class PlayerController extends BaseController
   void mediaError(String error) {
     WakelockPlus.disable();
   }
+
+  /// 播放真正恢复（playing=true）时回调，子类可重置断流恢复计数
+  void onPlaybackResumed() {}
 
   void showDebugInfo() {
     Utils.showBottomSheet(

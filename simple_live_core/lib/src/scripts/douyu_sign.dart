@@ -6,19 +6,24 @@ class DouyuSign {
 ''';
 
   static String getSign(String html, String rid, {String? dyDid}) {
+    // 内联的 CryptoJS 约 29KB，房间加密脚本约 50KB，
+    // 4MB/64KB 的上限会让 quickjs 直接 abort（表现为无日志闪退），留出余量
     JsRuntime flutterJs = JsRuntime(
-      memoryLimit: 4 * 1024 * 1024,
-      maxStackSize: 64 * 1024,
+      memoryLimit: 16 * 1024 * 1024,
+      maxStackSize: 512 * 1024,
     );
 
-    flutterJs.eval(kCryptoJs);
+    try {
+      flutterJs.eval(kCryptoJs);
 
-    // 优先使用用户从浏览器导入的 dy_did；否则回退到原匿名 did
-    var did = dyDid ?? "10000000000000000000000000001501";
-    var time = (DateTime.now().millisecondsSinceEpoch / 1000).round();
-    flutterJs.eval(html);
-    var data = flutterJs.eval("ub98484234('$rid','$did','$time')");
-    flutterJs.dispose();
-    return data;
+      // 优先使用用户从浏览器导入的 dy_did；否则回退到原匿名 did
+      var did = dyDid ?? "10000000000000000000000000001501";
+      var time = (DateTime.now().millisecondsSinceEpoch / 1000).round();
+      flutterJs.eval(html);
+      var data = flutterJs.eval("ub98484234('$rid','$did','$time')");
+      return data;
+    } finally {
+      flutterJs.dispose();
+    }
   }
 }

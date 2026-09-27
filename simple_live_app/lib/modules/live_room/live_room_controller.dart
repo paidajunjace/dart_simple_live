@@ -153,10 +153,6 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
     autoExitTimer = Timer.periodic(const Duration(seconds: 1), (timer) async {
       countdown.value -= 1;
       if (countdown.value <= 0) {
-        timer = Timer(const Duration(seconds: 10), () async {
-          await WakelockPlus.disable();
-          exit(0);
-        });
         autoExitTimer?.cancel();
         var delay = await Utils.showAlertDialog("定时关闭已到时,是否延迟关闭?",
             title: "延迟关闭", confirm: "延迟", cancel: "关闭", selectable: true);
@@ -206,6 +202,9 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
     if (msg.type == LiveMessageType.chat) {
       if (messages.length > 200 && !disableAutoScroll.value) {
         messages.removeAt(0);
+      } else if (disableAutoScroll.value && messages.length > 2000) {
+        // 查看历史时不打断阅读，但给个上限防止无限堆积
+        messages.removeRange(0, messages.length - 2000);
       }
 
       // 关键词屏蔽检查
@@ -335,7 +334,8 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
       Log.logPrint(e);
       //SmartDialog.showToast(e.toString());
       loadError.value = true;
-      error = e as Error;
+      // 网络层的异常多是 Exception 而非 Error，直接 as Error 会二次抛 TypeError
+      error = e is Error ? e : StateError(e.toString());
     } finally {
       SmartDialog.dismiss(status: SmartStatus.loading);
     }
@@ -368,7 +368,7 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
         currentQuality = middle;
       }
 
-      getPlayUrl();
+      await getPlayUrl();
     } catch (e) {
       Log.logPrint(e);
       SmartDialog.showToast("无法读取播放清晰度");
@@ -389,24 +389,30 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
     return qualityLevel;
   }
 
-  void getPlayUrl() async {
-    playUrls.clear();
-    currentQualityInfo.value = qualites[currentQuality].quality;
-    currentLineInfo.value = "";
-    currentLineIndex = -1;
-    var playUrl = await site.liveSite
-        .getPlayUrls(detail: detail.value!, quality: qualites[currentQuality]);
-    if (playUrl.urls.isEmpty) {
-      SmartDialog.showToast("无法读取播放地址");
-      return;
+  Future<void> getPlayUrl() async {
+    try {
+      playUrls.clear();
+      currentQualityInfo.value = qualites[currentQuality].quality;
+      currentLineInfo.value = "";
+      currentLineIndex = -1;
+      var playUrl = await site.liveSite.getPlayUrls(
+          detail: detail.value!, quality: qualites[currentQuality]);
+      if (playUrl.urls.isEmpty) {
+        SmartDialog.showToast("无法读取播放地址");
+        return;
+      }
+      playUrls.value = playUrl.urls;
+      playHeaders = playUrl.headers;
+      currentLineIndex = 0;
+      currentLineInfo.value = "线路${currentLineIndex + 1}";
+      //重置错误次数
+      mediaErrorRetryCount = 0;
+      liveStatus.value = true;
+      await initPlaylist();
+    } catch (e) {
+      Log.logPrint(e);
+      SmartDialog.showToast("获取播放地址失败");
     }
-    playUrls.value = playUrl.urls;
-    playHeaders = playUrl.headers;
-    currentLineIndex = 0;
-    currentLineInfo.value = "线路${currentLineIndex + 1}";
-    //重置错误次数
-    mediaErrorRetryCount = 0;
-    initPlaylist();
   }
 
   void changePlayLine(int index) {
@@ -416,7 +422,7 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
     setPlayer();
   }
 
-  void initPlaylist() async {
+  Future<void> initPlaylist() async {
     currentLineInfo.value = "线路${currentLineIndex + 1}";
     errorMsg.value = "";
 
@@ -431,7 +437,11 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
     // 初始化播放器并设置 ao 参数
     await initializePlayer();
 
-    await player.open(Playlist(mediaList));
+    try {
+      await player.open(Playlist(mediaList));
+    } catch (e) {
+      Log.logPrint(e);
+    }
   }
 
   void setPlayer() async {
@@ -441,56 +451,98 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
     await player.jump(currentLineIndex);
   }
 
-  @override
-  void mediaEnd() async {
-    super.mediaEnd();
-    if (mediaErrorRetryCount < 2) {
-      Log.d("播放结束，尝试第${mediaErrorRetryCount + 1}次刷新");
-      if (mediaErrorRetryCount == 1) {
-        //延迟一秒再刷新
-        await Future.delayed(const Duration(seconds: 1));
-      }
-      mediaErrorRetryCount += 1;
-      //刷新一次
-      setPlayer();
+  /// 断流恢复：同一线路快速重放两次 → 换线路 → 重新签名取新地址。
+  /// 直播流地址只在取回那一刻新鲜，反复 jump 旧地址只会循环失败，
+  /// 表现为画面反复刷新后停住；重签等价于网页播放器定时刷新取流。
+  bool _recovering = false;
+  DateTime _lastRecoverAt = DateTime.fromMillisecondsSinceEpoch(0);
+
+  Future<void> recoverPlayback(String from) async {
+    if (!liveStatus.value) {
       return;
     }
-
-    Log.d("播放结束");
-    // 遍历线路，如果全部链接都断开就是直播结束了
-    if (playUrls.length - 1 == currentLineIndex) {
-      liveStatus.value = false;
-    } else {
-      changePlayLine(currentLineIndex + 1);
-
-      //setPlayer();
+    final now = DateTime.now();
+    if (_recovering ||
+        now.difference(_lastRecoverAt) < const Duration(seconds: 2)) {
+      Log.d("恢复进行中，忽略重复触发($from)");
+      return;
+    }
+    _recovering = true;
+    _lastRecoverAt = now;
+    try {
+      if (mediaErrorRetryCount < 2) {
+        Log.d("播放中断($from)，第${mediaErrorRetryCount + 1}次重放当前线路");
+        if (mediaErrorRetryCount == 1) {
+          await Future.delayed(const Duration(seconds: 1));
+        }
+        mediaErrorRetryCount += 1;
+        setPlayer();
+        return;
+      }
+      if (currentLineIndex + 1 < playUrls.length) {
+        Log.d("播放中断($from)，切换下一条线路");
+        mediaErrorRetryCount = 0;
+        changePlayLine(currentLineIndex + 1);
+        return;
+      }
+      if (mediaRefreshCount < 2) {
+        mediaRefreshCount += 1;
+        Log.d("播放中断($from)，重新签名获取播放地址，第${mediaRefreshCount}次");
+        await getPlayUrl();
+        return;
+      }
+      Log.d("播放中断($from)，恢复手段已用尽，复核真实开播状态");
+      await confirmLiveStatus();
+    } catch (e) {
+      Log.logPrint(e);
+    } finally {
+      _recovering = false;
     }
   }
 
   int mediaErrorRetryCount = 0;
+  int mediaRefreshCount = 0;
+
+  /// 重签仍失败时向房间接口复核：仍在播就冷却后重试，真下播才置为暂停，
+  /// 避免把 CDN 断流误判成"直播结束"
+  Future<void> confirmLiveStatus() async {
+    try {
+      var living = await site.liveSite.getLiveStatus(roomId: roomId);
+      if (living) {
+        Log.d("复核：主播仍在直播，按取流失败处理，冷却后重取地址");
+        errorMsg.value = "";
+        mediaErrorRetryCount = 0;
+        await Future.delayed(const Duration(seconds: 5));
+        mediaRefreshCount = 0;
+        await getPlayUrl();
+      } else {
+        liveStatus.value = false;
+      }
+    } catch (e) {
+      Log.logPrint(e);
+      liveStatus.value = false;
+    }
+  }
+
+  @override
+  void mediaEnd() async {
+    super.mediaEnd();
+    Log.d("播放结束");
+    await recoverPlayback("end");
+  }
+
   @override
   void mediaError(String error) async {
-    super.mediaEnd();
-    if (mediaErrorRetryCount < 2) {
-      Log.d("播放失败，尝试第${mediaErrorRetryCount + 1}次刷新");
-      if (mediaErrorRetryCount == 1) {
-        //延迟一秒再刷新
-        await Future.delayed(const Duration(seconds: 1));
-      }
-      mediaErrorRetryCount += 1;
-      //刷新一次
-      setPlayer();
-      return;
-    }
+    // 原实现误调 super.mediaEnd()，每次报错都会关掉屏幕常亮
+    super.mediaError(error);
+    Log.d("播放器错误：$error");
+    await recoverPlayback("error");
+  }
 
-    if (playUrls.length - 1 == currentLineIndex) {
-      errorMsg.value = "播放失败";
-      SmartDialog.showToast("播放失败:$error");
-    } else {
-      //currentLineIndex += 1;
-      //setPlayer();
-      changePlayLine(currentLineIndex + 1);
-    }
+  @override
+  void onPlaybackResumed() {
+    // 真正播起来才算恢复，重置断流恢复计数
+    mediaRefreshCount = 0;
   }
 
   /// 读取SC

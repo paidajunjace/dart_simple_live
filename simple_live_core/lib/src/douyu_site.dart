@@ -159,8 +159,8 @@ class DouyuSite implements LiveSite {
 
     // 实测各线路下载速度，从快到慢排序（对齐网页播放器自动选线），线路1=最快
     if (lines.length > 1) {
-      final scores =
-          await Future.wait(lines.map((l) => _probeSpeedScore(l.url)));
+      final scores = await Future.wait(
+          lines.map((l) => _probeSpeedScore(detail.roomId, l.url)));
       if (scores.any((s) => s < 10000)) {
         final order = List<int>.generate(lines.length, (i) => i)
           ..sort((a, b) => scores[a].compareTo(scores[b]));
@@ -182,16 +182,33 @@ class DouyuSite implements LiveSite {
       } catch (_) {}
     }
 
-    return LivePlayUrl(urls: lines.map((l) => l.url).toList());
+    return LivePlayUrl(
+      urls: lines.map((l) => l.url).toList(),
+      headers: playHeaders(detail.roomId),
+    );
+  }
+
+  static const String kWebUserAgent =
+      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36 Edg/114.0.1823.43";
+
+  /// 播放器拉流需要的请求头。
+  /// 斗鱼 CDN 会掐掉不带 referer / 浏览器 UA 的匿名长连接，
+  /// 缺这几个头时表现为看几分钟后流被切断。
+  Map<String, String> playHeaders(String roomId) {
+    return {
+      'referer': 'https://www.douyu.com/$roomId',
+      'user-agent': kWebUserAgent,
+      if (cookie.isNotEmpty) 'cookie': cookie,
+    };
   }
 
   static const int _kProbeBytes = 192 * 1024;
 
   /// 测速评分：数字越小越快。<10000=可正常拉流；>=10000=慢/失败惩罚值；99999=完全失败
-  Future<double> _probeSpeedScore(String url) async {
+  Future<double> _probeSpeedScore(String roomId, String url) async {
     final cancelToken = CancelToken();
     try {
-      return await _probeDownload(url, cancelToken)
+      return await _probeDownload(roomId, url, cancelToken)
           .timeout(const Duration(seconds: 4), onTimeout: () => 99999);
     } catch (_) {
       return 99999;
@@ -202,7 +219,8 @@ class DouyuSite implements LiveSite {
     }
   }
 
-  Future<double> _probeDownload(String url, CancelToken cancelToken) async {
+  Future<double> _probeDownload(
+      String roomId, String url, CancelToken cancelToken) async {
     final sw = Stopwatch()..start();
     var received = 0;
     final response = await HttpClient.instance.dio.get<ResponseBody>(
@@ -211,6 +229,7 @@ class DouyuSite implements LiveSite {
         responseType: ResponseType.stream,
         connectTimeout: const Duration(seconds: 2),
         receiveTimeout: const Duration(seconds: 3),
+        headers: playHeaders(roomId),
       ),
       cancelToken: cancelToken,
     );
