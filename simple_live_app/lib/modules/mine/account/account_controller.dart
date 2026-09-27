@@ -177,7 +177,29 @@ class AccountController extends GetxController {
         DouyuAccountService.instance.clearCookie();
         SmartDialog.showToast("已清除斗鱼 Cookie");
       }
-    } else {
+      return;
+    }
+    // 网页登录优先，手动粘贴作为备选
+    var mode = await Get.dialog<String>(
+      AlertDialog(
+        title: const Text("斗鱼账号登录"),
+        content: const Text(
+            "使用你的斗鱼账号登录后，将以网页同款方式取流（原画原地址），避免匿名观看被限频掐断。"),
+        actions: [
+          TextButton(
+            onPressed: () => Get.back(result: "manual"),
+            child: const Text("手动粘贴Cookie"),
+          ),
+          TextButton(
+            onPressed: () => Get.back(result: "web"),
+            child: const Text("网页登录"),
+          ),
+        ],
+      ),
+    );
+    if (mode == "web") {
+      Get.toNamed(RoutePath.kDouyuWebLogin);
+    } else if (mode == "manual") {
       doDouyuCookieConfig();
     }
   }

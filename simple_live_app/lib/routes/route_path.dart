@@ -54,6 +54,9 @@ class RoutePath {
   /// BiliBili Web登录
   static const kBiliBiliWebLogin = "/settings/account/bilibili/web_login";
 
+  /// Douyu Web登录
+  static const kDouyuWebLogin = "/settings/account/douyu/web_login";
+
   /// BiliBili 二维码登录
   static const kBiliBiliQRLogin = "/settings/account/bilibili/qr_login";
 

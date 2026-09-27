@@ -105,6 +105,8 @@ class DouyuSite implements LiveSite {
     var result = await HttpClient.instance.postJson(
       "https://www.douyu.com/lapi/live/getH5Play/${detail.roomId}",
       data: data,
+      // 清晰度列表同样要带登录态，否则匿名请求拿不到账号画质档
+      header: playHeaders(detail.roomId),
       formUrlEncoded: true,
     );
 
