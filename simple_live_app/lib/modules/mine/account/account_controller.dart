@@ -8,6 +8,7 @@ import 'package:simple_live_app/routes/route_path.dart';
 import 'package:simple_live_app/services/bilibili_account_service.dart';
 import 'package:simple_live_app/services/douyin_account_service.dart';
 import 'package:simple_live_app/services/douyu_account_service.dart';
+import 'package:simple_live_app/services/douyu_cookie_secret.dart';
 import 'package:simple_live_core/simple_live_core.dart';
 
 class AccountController extends GetxController {
@@ -169,13 +170,38 @@ class AccountController extends GetxController {
 
   void douyuTap() async {
     if (DouyuAccountService.instance.hasCookie.value) {
-      var result = await Utils.showAlertDialog(
-        "确定要清除已导入的斗鱼 Cookie 吗？\n清除后将恢复为匿名（游客）方式观看。",
-        title: "清除配置",
+      // 已有登录态（含安装包预置）：提供 清除/重新登录/手动粘贴 三个入口
+      var source = DouyuAccountService.instance.cookie == kPrefilledDouyuCookie
+          ? "安装包预置的登录 Cookie"
+          : "已导入的登录 Cookie（${DouyuAccountService.instance.cookie.length} 字符）";
+      var mode = await Get.dialog<String>(
+        AlertDialog(
+          title: const Text("斗鱼登录状态"),
+          content: Text("当前使用$source，取流按该账号身份进行。\n" 
+              "可重新网页登录、更换Cookie，或清除后恢复匿名观看。"),
+          actions: [
+            TextButton(
+              onPressed: () => Get.back(result: "clear"),
+              child: const Text("清除"),
+            ),
+            TextButton(
+              onPressed: () => Get.back(result: "manual"),
+              child: const Text("手动粘贴"),
+            ),
+            TextButton(
+              onPressed: () => Get.back(result: "web"),
+              child: const Text("网页登录"),
+            ),
+          ],
+        ),
       );
-      if (result) {
+      if (mode == "clear") {
         DouyuAccountService.instance.clearCookie();
-        SmartDialog.showToast("已清除斗鱼 Cookie");
+        SmartDialog.showToast("已清除斗鱼 Cookie，恢复匿名观看");
+      } else if (mode == "web") {
+        Get.toNamed(RoutePath.kDouyuWebLogin);
+      } else if (mode == "manual") {
+        doDouyuCookieConfig();
       }
       return;
     }
