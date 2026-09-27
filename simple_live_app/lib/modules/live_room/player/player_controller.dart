@@ -692,6 +692,12 @@ class PlayerController extends BaseController
       if (event.contains('no sound.')) {
         return;
       }
+      // 直播流打开时 media_kit 自动 seek，mpv 报的 seek 指令错误
+      // 不代表断流；不过滤会误触发恢复链换线/重签风暴
+      if (event.contains('Cannot seek') ||
+          event.contains('force-seekable')) {
+        return;
+      }
       //SmartDialog.showToast(event);
       mediaError(event);
     });
