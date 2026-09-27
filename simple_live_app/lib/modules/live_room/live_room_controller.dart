@@ -444,7 +444,6 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
 
     // 初始化播放器并设置 ao 参数
     await initializePlayer();
-    final errBefore = player.state.error ?? "";
 
     try {
       // 只 open 单条媒体：Playlist 多条目会在条目结束时自动前进，
@@ -462,13 +461,9 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
         return false;
       }
       await Future.delayed(const Duration(milliseconds: 500));
-      if (player.state.playing) {
+      // PlayerState 无 error 字段；playing=true 或探测到视频宽高即生效
+      if (player.state.playing || (player.state.width ?? 0) > 0) {
         return true;
-      }
-      final err = player.state.error ?? "";
-      if (err.isNotEmpty && err != errBefore) {
-        Log.d("播放切换校验失败：$err");
-        return false;
       }
     }
     Log.d("播放切换校验超时(8s)，判定本次取流未生效");
@@ -478,7 +473,11 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
   Future<void> setPlayer() async {
     currentLineInfo.value = "线路${currentLineIndex + 1}";
     errorMsg.value = "";
-    await initPlaylist();
+    final ok = await initPlaylist();
+    if (!ok) {
+      // 换线后也没真正切过去：继续走恢复链，而不是停在这里
+      recoverPlayback("linefail");
+    }
   }
 
   /// 断流恢复：同一线路快速重放两次 → 换线路 → 重新签名取新地址。
