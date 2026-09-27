@@ -108,6 +108,10 @@ class DouyuSite implements LiveSite {
       formUrlEncoded: true,
     );
 
+    if (result["error"] != 0 || result["data"] == null) {
+      throw Exception(
+          "斗鱼getH5Play失败 error=${result["error"]} msg=${result["msg"]}");
+    }
     var cdns = <String>[];
     for (var item in result["data"]["cdnsWithName"]) {
       cdns.add(item["cdn"].toString());
@@ -264,6 +268,15 @@ class DouyuSite implements LiveSite {
       formUrlEncoded: true,
     );
 
+    if (result["error"] != 0 || result["data"] == null) {
+      // 斗鱼限频/风控时 HTTP 仍是 200，必须把 body 里的错误带出去
+      throw Exception(
+          "斗鱼getH5Play失败 error=${result["error"]} msg=${result["msg"]}");
+    }
+    if (result["data"]["rtmp_url"] == null ||
+        result["data"]["rtmp_live"] == null) {
+      throw Exception("斗鱼getH5Play无流地址");
+    }
     return "${result["data"]["rtmp_url"]}/${HtmlUnescape().convert(result["data"]["rtmp_live"].toString())}";
   }
 

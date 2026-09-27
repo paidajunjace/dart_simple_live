@@ -410,6 +410,7 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
       liveStatus.value = true;
       startStallWatchdog();
       await initPlaylist();
+      scheduleProactiveRefresh();
       return true;
     } catch (e) {
       Log.logPrint(e);
@@ -460,8 +461,9 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
   bool _recovering = false;
   DateTime _lastRecoverAt = DateTime.fromMillisecondsSinceEpoch(0);
   Timer? _recoverRetryTimer;
+  Timer? _proactiveRefreshTimer;
 
-  Future<void> recoverPlayback(String from) async {
+  Future<void> recoverPlayback(String from, {String? raw}) async {
     if (!liveStatus.value) {
       return;
     }
@@ -475,8 +477,14 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
     _lastRecoverAt = now;
     _recoverRetryTimer?.cancel();
     _recoverRetryTimer = null;
+    // CDN 定点掐断(tls reset/流提前结束)后，旧地址重开只能活几秒，
+    // 重放和换线都是无效挣扎，直接走重签
+    final cdnReset = raw != null &&
+        (raw.contains("ends prematurely") ||
+            raw.contains("reset by peer") ||
+            raw.contains("ffurl_read returned"));
     try {
-      if (mediaErrorRetryCount < 2) {
+      if (!cdnReset && mediaErrorRetryCount < 2) {
         Log.d("播放中断($from)，第${mediaErrorRetryCount + 1}次重放当前线路");
         if (mediaErrorRetryCount == 1) {
           await Future.delayed(const Duration(seconds: 1));
@@ -485,7 +493,7 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
         setPlayer();
         return;
       }
-      if (currentLineIndex + 1 < playUrls.length) {
+      if (!cdnReset && currentLineIndex + 1 < playUrls.length) {
         Log.d("播放中断($from)，切换下一条线路");
         mediaErrorRetryCount = 0;
         changePlayLine(currentLineIndex + 1);
@@ -593,7 +601,7 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
     // 原实现误调 super.mediaEnd()，每次报错都会关掉屏幕常亮
     super.mediaError(error);
     Log.d("播放器错误：$error");
-    await recoverPlayback("error");
+    await recoverPlayback("error", raw: error);
   }
 
   @override
@@ -612,6 +620,25 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
     _recoverRetryTimer = Timer(const Duration(seconds: 5), () {
       recoverPlayback("retry");
     });
+  }
+
+  /// 斗鱼 CDN 会掐断整 5 分钟的 FLV 连接（实测两次恰好 300s），
+  /// 断开后旧地址重开只能活几秒。在 4 分 30 秒主动重签换新地址，
+  /// 把被动死亡变成一次 1~2 秒的主动小重连
+  void scheduleProactiveRefresh() {
+    _proactiveRefreshTimer?.cancel();
+    _proactiveRefreshTimer = Timer(const Duration(seconds: 270), () {
+      if (!liveStatus.value) {
+        return;
+      }
+      Log.d("主动重签：CDN 5 分钟掐断窗口前刷新取流地址");
+      getPlayUrl();
+    });
+  }
+
+  void cancelProactiveRefresh() {
+    _proactiveRefreshTimer?.cancel();
+    _proactiveRefreshTimer = null;
   }
 
   /// 读取SC
@@ -1183,6 +1210,7 @@ ${error?.stackTrace}''');
     _liveDurationTimer?.cancel(); // 页面关闭时取消定时器
     stopStallWatchdog();
     _recoverRetryTimer?.cancel();
+    cancelProactiveRefresh();
     super.onClose();
   }
 }
