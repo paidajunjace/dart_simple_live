@@ -28,14 +28,15 @@ class Log {
   static RxList<DebugLogModel> debugLogs = <DebugLogModel>[].obs;
 
   static void addDebugLog(String content, Color? color) {
-    if (kReleaseMode) {
-      return;
-    }
     if (content.contains("请求响应")) {
       content = content.split("\n").join('\n💡 ');
     }
     try {
       debugLogs.insert(0, DebugLogModel(DateTime.now(), content, color: color));
+      // 最新在前，封顶防止长时间观看内存无限增长
+      if (debugLogs.length > 2000) {
+        debugLogs.removeRange(2000, debugLogs.length);
+      }
     } catch (e) {
       if (kDebugMode) {
         print(e);
