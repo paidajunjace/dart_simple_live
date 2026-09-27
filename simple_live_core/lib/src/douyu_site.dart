@@ -29,6 +29,12 @@ class DouyuSite implements LiveSite {
   /// 用户从浏览器导入的登录 Cookie（含 dy_did 等），为空则用匿名方式观看
   String cookie = "";
 
+  /// 缓存本次进房的加密脚本与房间号：getPlayUrls 每次现签新时间戳，
+  /// 不复用 detail.data 里进房时那份旧签名（06:47 事故的直接原因：
+  /// 主动重签沿用了 10 分钟前的旧 tt，被斗鱼拒签）
+  String _crptext = "";
+  String _crpRoomId = "";
+
   @override
   LiveDanmaku getDanmaku() => DouyuDanmaku();
 
@@ -146,6 +152,15 @@ class DouyuSite implements LiveSite {
     required LivePlayQuality quality,
   }) async {
     var args = detail.data.toString();
+    if (_crptext.isNotEmpty && _crpRoomId == detail.roomId) {
+      // 用缓存的加密脚本现签一个全新时间戳，替换可能已陈旧的旧签名串
+      try {
+        args = DouyuSign.getSign(_crptext, detail.roomId,
+            dyDid: _extractDyDid());
+      } catch (e) {
+        CoreLog.error("斗鱼现签失败，退回旧签名串: $e");
+      }
+    }
     if (args.isEmpty) {
       // detail.data 是签名产物；空值说明本地签名环节出了问题，
       // 这里必须留痕，否则上层只见秒败不见原因（06:47 事故）
@@ -340,6 +355,8 @@ class DouyuSite implements LiveSite {
       },
     );
     var crptext = json.decode(jsEncResult)["data"]["room$roomId"].toString();
+    _crptext = crptext;
+    _crpRoomId = roomId;
 
     if (showTime != null && showTime.isNotEmpty) {
       try {
