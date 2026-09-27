@@ -389,7 +389,7 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
     return qualityLevel;
   }
 
-  Future<void> getPlayUrl() async {
+  Future<bool> getPlayUrl() async {
     try {
       playUrls.clear();
       currentQualityInfo.value = qualites[currentQuality].quality;
@@ -399,7 +399,7 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
           detail: detail.value!, quality: qualites[currentQuality]);
       if (playUrl.urls.isEmpty) {
         SmartDialog.showToast("无法读取播放地址");
-        return;
+        return false;
       }
       playUrls.value = playUrl.urls;
       playHeaders = playUrl.headers;
@@ -408,10 +408,13 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
       //重置错误次数
       mediaErrorRetryCount = 0;
       liveStatus.value = true;
+      startStallWatchdog();
       await initPlaylist();
+      return true;
     } catch (e) {
       Log.logPrint(e);
       SmartDialog.showToast("获取播放地址失败");
+      return false;
     }
   }
 
@@ -456,6 +459,7 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
   /// 表现为画面反复刷新后停住；重签等价于网页播放器定时刷新取流。
   bool _recovering = false;
   DateTime _lastRecoverAt = DateTime.fromMillisecondsSinceEpoch(0);
+  Timer? _recoverRetryTimer;
 
   Future<void> recoverPlayback(String from) async {
     if (!liveStatus.value) {
@@ -469,6 +473,8 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
     }
     _recovering = true;
     _lastRecoverAt = now;
+    _recoverRetryTimer?.cancel();
+    _recoverRetryTimer = null;
     try {
       if (mediaErrorRetryCount < 2) {
         Log.d("播放中断($from)，第${mediaErrorRetryCount + 1}次重放当前线路");
@@ -488,7 +494,11 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
       if (mediaRefreshCount < 2) {
         mediaRefreshCount += 1;
         Log.d("播放中断($from)，重新签名获取播放地址，第${mediaRefreshCount}次");
-        await getPlayUrl();
+        final ok = await getPlayUrl();
+        if (!ok) {
+          // 取地址失败（限频/网络抖动）：5 秒后重试，别让恢复链断头
+          _scheduleRecoveryRetry();
+        }
         return;
       }
       Log.d("播放中断($from)，恢复手段已用尽，复核真实开播状态");
@@ -503,6 +513,49 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
   int mediaErrorRetryCount = 0;
   int mediaRefreshCount = 0;
 
+  /// 播放位置看门狗：CDN 静默断流时 mpv 不报 error/completed，
+  /// 画面直接冻结且恢复链没有入口。每 5 秒采样一次位置，
+  /// playing 状态下连续两拍无进展即判定卡死，主动走恢复链。
+  Timer? _stallWatchdog;
+  int _lastWatchPosMs = -1;
+  int _stallBeats = 0;
+
+  void startStallWatchdog() {
+    _stallWatchdog?.cancel();
+    _lastWatchPosMs = -1;
+    _stallBeats = 0;
+    _stallWatchdog = Timer.periodic(const Duration(seconds: 5), (timer) {
+      if (!liveStatus.value) {
+        _stallBeats = 0;
+        return;
+      }
+      if (!player.state.playing) {
+        // 用户主动暂停时不误判
+        _stallBeats = 0;
+        _lastWatchPosMs = -1;
+        return;
+      }
+      final pos = player.state.position.inMilliseconds;
+      if (pos == _lastWatchPosMs) {
+        _stallBeats += 1;
+        if (_stallBeats >= 2) {
+          Log.d("看门狗：播放位置 10 秒无进展(pos=$pos)，触发断流恢复");
+          _stallBeats = 0;
+          _lastWatchPosMs = -1;
+          recoverPlayback("stall");
+        }
+      } else {
+        _stallBeats = 0;
+        _lastWatchPosMs = pos;
+      }
+    });
+  }
+
+  void stopStallWatchdog() {
+    _stallWatchdog?.cancel();
+    _stallWatchdog = null;
+  }
+
   /// 重签仍失败时向房间接口复核：仍在播就冷却后重试，真下播才置为暂停，
   /// 避免把 CDN 断流误判成"直播结束"
   Future<void> confirmLiveStatus() async {
@@ -514,13 +567,17 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
         mediaErrorRetryCount = 0;
         await Future.delayed(const Duration(seconds: 5));
         mediaRefreshCount = 0;
-        await getPlayUrl();
+        final ok = await getPlayUrl();
+        if (!ok) {
+          _scheduleRecoveryRetry();
+        }
       } else {
         liveStatus.value = false;
       }
     } catch (e) {
+      // 复核请求失败不等于下播（可能只是限频/网络抖动），冷却后重试
       Log.logPrint(e);
-      liveStatus.value = false;
+      _scheduleRecoveryRetry();
     }
   }
 
@@ -541,8 +598,20 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
 
   @override
   void onPlaybackResumed() {
-    // 真正播起来才算恢复，重置断流恢复计数
+    // 真正播起来才算恢复，重置断流恢复计数与看门狗节拍
     mediaRefreshCount = 0;
+    _stallBeats = 0;
+    _recoverRetryTimer?.cancel();
+    _recoverRetryTimer = null;
+  }
+
+  /// 断流恢复重试：mpv 进入 idle 或取地址失败后不再产生事件，
+  /// 不补一个定时入口的话恢复链会停在原地（表现为直接暂停）
+  void _scheduleRecoveryRetry() {
+    _recoverRetryTimer?.cancel();
+    _recoverRetryTimer = Timer(const Duration(seconds: 5), () {
+      recoverPlayback("retry");
+    });
   }
 
   /// 读取SC
@@ -1112,6 +1181,8 @@ ${error?.stackTrace}''');
     liveDanmaku.stop();
     danmakuController = null;
     _liveDurationTimer?.cancel(); // 页面关闭时取消定时器
+    stopStallWatchdog();
+    _recoverRetryTimer?.cancel();
     super.onClose();
   }
 }

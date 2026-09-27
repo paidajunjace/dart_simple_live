@@ -226,13 +226,19 @@ class FollowService extends GetxService {
     try {
       var site = Sites.allSites[item.siteId]!;
       // 先只查状态
+      var wasLiving = item.liveStatus.value == 2;
       var isLiving = await site.liveSite.getLiveStatus(roomId: item.roomId);
       item.liveStatus.value = isLiving ? 2 : 1;
-      if (item.liveStatus.value == 2) {
-        // 只有正在直播时才查详细信息
-        var detail = await site.liveSite.getRoomDetail(roomId: item.roomId);
-        item.liveStartTime = detail.showTime;
-      } else {
+      if (isLiving && !wasLiving) {
+        // 只在"刚开播"时拉详情取开播时间：全量详情(斗鱼含签名)每轮打一遍
+        // 会触发平台限频，殃及正在观看的直播间取流；详情失败不影响状态
+        try {
+          var detail = await site.liveSite.getRoomDetail(roomId: item.roomId);
+          item.liveStartTime = detail.showTime;
+        } catch (e) {
+          Log.logPrint(e);
+        }
+      } else if (!isLiving) {
         item.liveStartTime = null;
       }
     } catch (e) {

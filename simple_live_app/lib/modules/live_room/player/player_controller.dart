@@ -59,6 +59,9 @@ mixin PlayerMixin {
     await pp.setProperty('cache-secs', '10');
     await pp.setProperty('demuxer-max-bytes', '32768KiB');
     await pp.setProperty('demuxer-max-back-bytes', '0');
+    // CDN 静默掐断连接时 mpv 不报错只卡 buffering，画面冻结且恢复链无入口；
+    // network-timeout 让死连接 15 秒必报错，交由恢复链重签地址
+    await pp.setProperty('network-timeout', '15');
   }
 
   /// 视频控制器
