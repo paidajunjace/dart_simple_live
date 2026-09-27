@@ -430,29 +430,28 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
     currentLineInfo.value = "线路${currentLineIndex + 1}";
     errorMsg.value = "";
 
-    final mediaList = playUrls.map((url) {
-      var finalUrl = url;
-      if (AppSettingsController.instance.playerForceHttps.value) {
-        finalUrl = finalUrl.replaceAll("http://", "https://");
-      }
-      return Media(finalUrl, httpHeaders: playHeaders);
-    }).toList();
+    var finalUrl = playUrls[currentLineIndex];
+    if (AppSettingsController.instance.playerForceHttps.value) {
+      finalUrl = finalUrl.replaceAll("http://", "https://");
+    }
 
     // 初始化播放器并设置 ao 参数
     await initializePlayer();
 
     try {
-      await player.open(Playlist(mediaList));
+      // 只 open 单条媒体：Playlist 多条目会在条目结束时自动前进，
+      // 与恢复链的手动切换竞争，产生多条并发连接互相挤掉（斗鱼限制
+      // 同房间并发连接数），表现为反复重连
+      await player.open(Media(finalUrl, httpHeaders: playHeaders));
     } catch (e) {
       Log.logPrint(e);
     }
   }
 
-  void setPlayer() async {
+  Future<void> setPlayer() async {
     currentLineInfo.value = "线路${currentLineIndex + 1}";
     errorMsg.value = "";
-
-    await player.jump(currentLineIndex);
+    await initPlaylist();
   }
 
   /// 断流恢复：同一线路快速重放两次 → 换线路 → 重新签名取新地址。
@@ -463,7 +462,7 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
   Timer? _recoverRetryTimer;
   Timer? _proactiveRefreshTimer;
 
-  Future<void> recoverPlayback(String from, {String? raw}) async {
+  Future<void> recoverPlayback(String from) async {
     if (!liveStatus.value) {
       return;
     }
@@ -477,23 +476,9 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
     _lastRecoverAt = now;
     _recoverRetryTimer?.cancel();
     _recoverRetryTimer = null;
-    // CDN 定点掐断(tls reset/流提前结束)后，旧地址重开只能活几秒，
-    // 重放和换线都是无效挣扎，直接走重签
-    final cdnReset = raw != null &&
-        (raw.contains("ends prematurely") ||
-            raw.contains("reset by peer") ||
-            raw.contains("ffurl_read returned"));
     try {
-      if (!cdnReset && mediaErrorRetryCount < 2) {
-        Log.d("播放中断($from)，第${mediaErrorRetryCount + 1}次重放当前线路");
-        if (mediaErrorRetryCount == 1) {
-          await Future.delayed(const Duration(seconds: 1));
-        }
-        mediaErrorRetryCount += 1;
-        setPlayer();
-        return;
-      }
-      if (!cdnReset && currentLineIndex + 1 < playUrls.length) {
+      // 断过的地址重开只会活几秒（CDN 必掐），重放无效；优先换线
+      if (currentLineIndex + 1 < playUrls.length) {
         Log.d("播放中断($from)，切换下一条线路");
         mediaErrorRetryCount = 0;
         changePlayLine(currentLineIndex + 1);
@@ -601,7 +586,7 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
     // 原实现误调 super.mediaEnd()，每次报错都会关掉屏幕常亮
     super.mediaError(error);
     Log.d("播放器错误：$error");
-    await recoverPlayback("error", raw: error);
+    await recoverPlayback("error");
   }
 
   @override

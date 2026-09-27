@@ -48,15 +48,14 @@ mixin PlayerMixin {
         );
       }
     }
-    // media_kit 仓库更新导致的问题，临时解决办法
-    if(Platform.isAndroid){
-      await pp.setProperty('force-seekable', 'yes');
-    }
+    // force-seekable 已移除：它让 mpv 把直播流当可 seek 文件，
+    // open/jump 时的自动 seek 会从旧缓冲位置继续播（画面停在几分钟前），
+    // 并触发 Cannot seek backward 错误风暴；直播流必须走 live 路径
     // 直播流缓冲：预读保留抗网络抖动，但封顶缓冲并丢弃已播数据，
     // 否则直播场景下延迟与内存会持续累积，几分钟后表现为卡住
     await pp.setProperty('demuxer-readahead-secs', '5');
-    await pp.setProperty('cache', 'yes');
-    await pp.setProperty('cache-secs', '10');
+    // cache=yes 在此环境只得到 Failed to create file cache（无效），
+    // 且 demuxer 缓冲积压会让直播延迟持续增长；保留小预读和硬上限即可
     await pp.setProperty('demuxer-max-bytes', '32768KiB');
     await pp.setProperty('demuxer-max-back-bytes', '0');
     // CDN 静默掐断连接时 mpv 不报错只卡 buffering，画面冻结且恢复链无入口；
