@@ -368,7 +368,11 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
         currentQuality = middle;
       }
 
-      await getPlayUrl();
+      final opened = await getPlayUrl();
+      if (!opened) {
+        // 首播也没切过去：交给恢复链（换线/重签/退避重试）
+        recoverPlayback("openfail");
+      }
     } catch (e) {
       Log.logPrint(e);
       SmartDialog.showToast("无法读取播放清晰度");
@@ -409,7 +413,10 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
       mediaErrorRetryCount = 0;
       liveStatus.value = true;
       startStallWatchdog();
-      await initPlaylist();
+      final opened = await initPlaylist();
+      if (!opened) {
+        return false;
+      }
       scheduleProactiveRefresh();
       return true;
     } catch (e) {
@@ -426,7 +433,7 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
     setPlayer();
   }
 
-  Future<void> initPlaylist() async {
+  Future<bool> initPlaylist() async {
     currentLineInfo.value = "线路${currentLineIndex + 1}";
     errorMsg.value = "";
 
@@ -437,6 +444,7 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
 
     // 初始化播放器并设置 ao 参数
     await initializePlayer();
+    final errBefore = player.state.error ?? "";
 
     try {
       // 只 open 单条媒体：Playlist 多条目会在条目结束时自动前进，
@@ -445,7 +453,26 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
       await player.open(Media(finalUrl, httpHeaders: playHeaders));
     } catch (e) {
       Log.logPrint(e);
+      return false;
     }
+    // open 返回≠切换生效：新签地址可能被 CDN 直接 404/403，
+    // mpv 之后静默无 error/completed（05:47 事故），主动校验 8 秒
+    for (var i = 0; i < 16; i++) {
+      if (_closed) {
+        return false;
+      }
+      await Future.delayed(const Duration(milliseconds: 500));
+      if (player.state.playing) {
+        return true;
+      }
+      final err = player.state.error ?? "";
+      if (err.isNotEmpty && err != errBefore) {
+        Log.d("播放切换校验失败：$err");
+        return false;
+      }
+    }
+    Log.d("播放切换校验超时(8s)，判定本次取流未生效");
+    return false;
   }
 
   Future<void> setPlayer() async {
@@ -461,8 +488,14 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
   DateTime _lastRecoverAt = DateTime.fromMillisecondsSinceEpoch(0);
   Timer? _recoverRetryTimer;
   Timer? _proactiveRefreshTimer;
+  bool _closed = false;
+  int _retryWaves = 0;
 
   Future<void> recoverPlayback(String from) async {
+    if (_closed || !Get.isRegistered<LiveRoomController>()) {
+      // 房间已销毁，拒绝僵尸恢复（退出房间后还在重签的 bug）
+      return;
+    }
     if (!liveStatus.value) {
       return;
     }
@@ -484,7 +517,7 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
         changePlayLine(currentLineIndex + 1);
         return;
       }
-      if (mediaRefreshCount < 2) {
+      if (mediaRefreshCount < 4) {
         mediaRefreshCount += 1;
         Log.d("播放中断($from)，重新签名获取播放地址，第${mediaRefreshCount}次");
         final ok = await getPlayUrl();
@@ -594,6 +627,7 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
     // 真正播起来才算恢复，重置断流恢复计数与看门狗节拍
     mediaRefreshCount = 0;
     _stallBeats = 0;
+    _retryWaves = 0;
     _recoverRetryTimer?.cancel();
     _recoverRetryTimer = null;
   }
@@ -602,7 +636,16 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
   /// 不补一个定时入口的话恢复链会停在原地（表现为直接暂停）
   void _scheduleRecoveryRetry() {
     _recoverRetryTimer?.cancel();
-    _recoverRetryTimer = Timer(const Duration(seconds: 5), () {
+    _retryWaves += 1;
+    final base = _retryWaves - 1;
+    final pow = base > 4 ? 16 : (1 << base);
+    var secs = 5 * pow;
+    if (secs > 60) secs = 60;
+    Log.d("恢复将在 ${secs}s 后重试（第$_retryWaves轮）");
+    _recoverRetryTimer = Timer(Duration(seconds: secs), () {
+      if (_closed || !Get.isRegistered<LiveRoomController>()) {
+        return;
+      }
       recoverPlayback("retry");
     });
   }
@@ -613,6 +656,9 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
   void scheduleProactiveRefresh() {
     _proactiveRefreshTimer?.cancel();
     _proactiveRefreshTimer = Timer(const Duration(seconds: 270), () {
+      if (_closed || !Get.isRegistered<LiveRoomController>()) {
+        return;
+      }
       if (!liveStatus.value) {
         return;
       }
@@ -1186,6 +1232,7 @@ ${error?.stackTrace}''');
 
   @override
   void onClose() {
+    _closed = true;
     WidgetsBinding.instance.removeObserver(this);
     scrollController.removeListener(scrollListener);
     autoExitTimer?.cancel();
