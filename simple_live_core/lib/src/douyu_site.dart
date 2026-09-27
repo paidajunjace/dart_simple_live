@@ -146,13 +146,19 @@ class DouyuSite implements LiveSite {
     required LivePlayQuality quality,
   }) async {
     var args = detail.data.toString();
+    if (args.isEmpty) {
+      // detail.data 是签名产物；空值说明本地签名环节出了问题，
+      // 这里必须留痕，否则上层只见秒败不见原因（06:47 事故）
+      CoreLog.error("斗鱼重签入口：detail.data 为空，无法签名取流");
+    }
     var data = quality.data as DouyuPlayData;
 
     // 并行获取各 CDN 线路的播放地址
     final fetched = await Future.wait(data.cdns.map((cdn) async {
       try {
         return await getPlayUrl(detail.roomId, args, data.rate, cdn);
-      } catch (_) {
+      } catch (e) {
+        CoreLog.error("取流线路 $cdn 失败: $e");
         return "";
       }
     }));

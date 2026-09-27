@@ -395,6 +395,15 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
 
   Future<bool> getPlayUrl() async {
     try {
+      // 斗鱼对登录态取流有单会话连接配额：旧连接被 CDN 掐成半开后仍占着
+      // 会话名额，新签名请求会被静默吞掉（日志里重签 0 次 HTTP、秒级返回）。
+      // 重签前必须彻底关播放器释放全部播放连接，open 失败再重试一次。
+      try {
+        await player.stop().timeout(const Duration(seconds: 2));
+      } catch (e) {
+        // 超时也继续：拿不到干净释放也要试新地址
+        Log.d("stop 未完成(忽略): $e");
+      }
       playUrls.clear();
       currentQualityInfo.value = qualites[currentQuality].quality;
       currentLineInfo.value = "";
@@ -413,7 +422,11 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
       mediaErrorRetryCount = 0;
       liveStatus.value = true;
       startStallWatchdog();
-      final opened = await initPlaylist();
+      var opened = await initPlaylist();
+      if (!opened) {
+        Log.d("首次 open 未生效，重试一次");
+        opened = await initPlaylist();
+      }
       if (!opened) {
         return false;
       }
@@ -662,7 +675,22 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
         return;
       }
       Log.d("主动重签：CDN 5 分钟掐断窗口前刷新取流地址");
-      getPlayUrl();
+      if (_recovering) {
+        return;
+      }
+      // 纳入恢复锁：getPlayUrl 里的 player.stop 会引发 completed 事件，
+      // 不加锁会再拉起一条并行的恢复链
+      _recovering = true;
+      _lastRecoverAt = DateTime.now();
+      getPlayUrl().then((ok) {
+        _recovering = false;
+        if (!ok) {
+          // 主动重签被频控挡下时旧流必在 300s 被掐（06:47 事故），
+          // 立即进恢复链，而不是等播放结束后才开始挣扎
+          Log.d("主动重签未生效，转入恢复链");
+          recoverPlayback("proactivefail");
+        }
+      });
     });
   }
 
