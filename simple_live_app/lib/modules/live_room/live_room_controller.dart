@@ -667,6 +667,11 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
   /// 把被动死亡变成一次 1~2 秒的主动小重连
   void scheduleProactiveRefresh() {
     _proactiveRefreshTimer?.cancel();
+    // 主动续流只针对斗鱼：它对 FLV 连接整 300 秒必掐，不提前重签必黑屏。
+    // 其他平台（B站/虎牙/抖音）按各自取流节奏走，不做定时打断
+    if (site.id != Constant.kDouyu) {
+      return;
+    }
     _proactiveRefreshTimer = Timer(const Duration(seconds: 270), () {
       if (_closed || !Get.isRegistered<LiveRoomController>()) {
         return;
