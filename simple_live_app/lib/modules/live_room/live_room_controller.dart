@@ -395,14 +395,15 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
 
   Future<bool> getPlayUrl() async {
     try {
-      // 斗鱼对登录态取流有单会话连接配额：旧连接被 CDN 掐成半开后仍占着
-      // 会话名额，新签名请求会被静默吞掉（日志里重签 0 次 HTTP、秒级返回）。
-      // 重签前必须彻底关播放器释放全部播放连接，open 失败再重试一次。
-      try {
-        await player.stop().timeout(const Duration(seconds: 2));
-      } catch (e) {
-        // 超时也继续：拿不到干净释放也要试新地址
-        Log.d("stop 未完成(忽略): $e");
+      if (site.id == Constant.kDouyu) {
+        // 斗鱼对登录态取流有单会话连接配额：旧连接被 CDN 掐成半开后仍占着
+        // 会话名额，新签名请求会被静默吞掉。重签前彻底关播放器释放连接。
+        try {
+          await player.stop().timeout(const Duration(seconds: 2));
+        } catch (e) {
+          // 超时也继续：拿不到干净释放也要试新地址
+          Log.d("stop 未完成(忽略): $e");
+        }
       }
       playUrls.clear();
       currentQualityInfo.value = qualites[currentQuality].quality;
@@ -455,14 +456,29 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
       finalUrl = finalUrl.replaceAll("http://", "https://");
     }
 
+    // 播放器按平台分支取参数：斗鱼激进续流参数，其他平台原版参数
+    douyuLive = site.id == Constant.kDouyu;
+
     // 初始化播放器并设置 ao 参数
     await initializePlayer();
 
     try {
-      // 只 open 单条媒体：Playlist 多条目会在条目结束时自动前进，
-      // 与恢复链的手动切换竞争，产生多条并发连接互相挤掉（斗鱼限制
-      // 同房间并发连接数），表现为反复重连
-      await player.open(Media(finalUrl, httpHeaders: playHeaders));
+      if (douyuLive) {
+        // 斗鱼：只 open 单条媒体。Playlist 自动前进会与恢复链竞争，
+        // 产生多条并发连接互相挤掉（斗鱼限制同房间并发连接数）
+        await player.open(Media(finalUrl, httpHeaders: playHeaders));
+      } else {
+        // 其他平台：恢复原版 Playlist 行为，mpv 自动前进兜底
+        final mediaList = playUrls.map((url) {
+          var u = url;
+          if (AppSettingsController.instance.playerForceHttps.value) {
+            u = u.replaceAll("http://", "https://");
+          }
+          return Media(u, httpHeaders: playHeaders);
+        }).toList();
+        await player.open(Playlist(mediaList));
+        return true;
+      }
     } catch (e) {
       Log.logPrint(e);
       return false;
@@ -486,6 +502,11 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
   Future<void> setPlayer() async {
     currentLineInfo.value = "线路${currentLineIndex + 1}";
     errorMsg.value = "";
+    if (site.id != Constant.kDouyu) {
+      // 原版：Playlist 内 jump（重放/换线都走这个）
+      await player.jump(currentLineIndex);
+      return;
+    }
     final ok = await initPlaylist();
     if (!ok) {
       // 换线后也没真正切过去：继续走恢复链，而不是停在这里
@@ -522,6 +543,32 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
     _recoverRetryTimer?.cancel();
     _recoverRetryTimer = null;
     try {
+      if (site.id != Constant.kDouyu) {
+        // 其他平台完全按原版节奏：同线路重放两次 → 换线 → 收口；
+        // 不做激进的 stop/重签，正常抖动不会被误判成断流频繁重连
+        if (mediaErrorRetryCount < 2) {
+          Log.d("播放中断($from)，第${mediaErrorRetryCount + 1}次重放当前线路");
+          if (mediaErrorRetryCount == 1) {
+            await Future.delayed(const Duration(seconds: 1));
+          }
+          mediaErrorRetryCount += 1;
+          setPlayer();
+          return;
+        }
+        if (currentLineIndex + 1 < playUrls.length) {
+          Log.d("播放中断($from)，切换下一条线路");
+          mediaErrorRetryCount = 0;
+          changePlayLine(currentLineIndex + 1);
+          return;
+        }
+        if (from == "end") {
+          liveStatus.value = false;
+        } else {
+          errorMsg.value = "播放失败";
+          SmartDialog.showToast("播放失败");
+        }
+        return;
+      }
       // 断过的地址重开只会活几秒（CDN 必掐），重放无效；优先换线
       if (currentLineIndex + 1 < playUrls.length) {
         Log.d("播放中断($from)，切换下一条线路");
@@ -560,6 +607,11 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
 
   void startStallWatchdog() {
     _stallWatchdog?.cancel();
+    if (site.id != Constant.kDouyu) {
+      // 原版平台不设位置看门狗：mpv 自身缓冲足以扛小抖动
+      _stallWatchdog = null;
+      return;
+    }
     _lastWatchPosMs = -1;
     _stallBeats = 0;
     _stallWatchdog = Timer.periodic(const Duration(seconds: 5), (timer) {

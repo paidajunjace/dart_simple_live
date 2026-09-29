@@ -26,6 +26,10 @@ mixin PlayerMixin {
   GlobalKey<VideoState> globalPlayerKey = GlobalKey<VideoState>();
   GlobalKey globalDanmuKey = GlobalKey();
 
+  /// 斗鱼标志：由 live_room_controller 在开播前设置，
+  /// 决定播放器用激进续流参数还是原版参数
+  bool douyuLive = false;
+
   /// 播放器实例
   late final player = Player(
     configuration: PlayerConfiguration(
@@ -48,19 +52,23 @@ mixin PlayerMixin {
         );
       }
     }
-    // force-seekable 已移除：它让 mpv 把直播流当可 seek 文件，
-    // open/jump 时的自动 seek 会从旧缓冲位置继续播（画面停在几分钟前），
-    // 并触发 Cannot seek backward 错误风暴；直播流必须走 live 路径
-    // 直播流缓冲：预读保留抗网络抖动，但封顶缓冲并丢弃已播数据，
-    // 否则直播场景下延迟与内存会持续累积，几分钟后表现为卡住
-    await pp.setProperty('demuxer-readahead-secs', '5');
-    // cache=yes 在此环境只得到 Failed to create file cache（无效），
-    // 且 demuxer 缓冲积压会让直播延迟持续增长；保留小预读和硬上限即可
-    await pp.setProperty('demuxer-max-bytes', '32768KiB');
-    await pp.setProperty('demuxer-max-back-bytes', '0');
-    // CDN 静默掐断连接时 mpv 不报错只卡 buffering，画面冻结且恢复链无入口；
-    // network-timeout 让死连接 15 秒必报错，交由恢复链重签地址
-    await pp.setProperty('network-timeout', '15');
+    if (douyuLive) {
+      // 斗鱼专用激进模式：无 force-seekable(live 走 live 路径)，
+      // 封顶缓冲丢弃已播数据，死连接 15 秒必报错交恢复链重签
+      await pp.setProperty('demuxer-readahead-secs', '5');
+      await pp.setProperty('demuxer-max-bytes', '32768KiB');
+      await pp.setProperty('demuxer-max-back-bytes', '0');
+      await pp.setProperty('network-timeout', '15');
+    } else {
+      // 虎牙/抖音/B站等：完全保留原版播放器设置与取流节奏，
+      // 避免激进缓冲/超时把正常抖动误判成断流导致频繁断连重播
+      if (Platform.isAndroid) {
+        await pp.setProperty('force-seekable', 'yes');
+      }
+      await pp.setProperty('demuxer-readahead-secs', '10');
+      await pp.setProperty('cache', 'yes');
+      await pp.setProperty('cache-secs', '20');
+    }
   }
 
   /// 视频控制器
