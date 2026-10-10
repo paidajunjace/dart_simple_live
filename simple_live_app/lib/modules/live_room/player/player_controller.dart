@@ -70,6 +70,10 @@ mixin PlayerMixin {
       await pp.setProperty('demuxer-readahead-secs', '10');
       await pp.setProperty('cache', 'yes');
       await pp.setProperty('cache-secs', '20');
+      // 连接层自愈：断流时由 ffmpeg 原地重连同一地址，
+      // 避免上层重建播放器造成画面重刷（虎牙地址实测可复用）
+      await pp.setProperty('stream-lavf-o',
+          'reconnect=1,reconnect_streamed=1,reconnect_at_eof=1,reconnect_delay_max=5');
     }
   }
 
