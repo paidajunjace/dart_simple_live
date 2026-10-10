@@ -523,6 +523,8 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
   /// 直播流地址只在取回那一刻新鲜，反复 jump 旧地址只会循环失败，
   /// 表现为画面反复刷新后停住；重签等价于网页播放器定时刷新取流。
   bool _recovering = false;
+  /// 非斗鱼平台：一次断流周期内只做一次地址刷新，避免刷新失败时反复重取
+  bool _urlRefreshedForRecovery = false;
   DateTime _lastRecoverAt = DateTime.fromMillisecondsSinceEpoch(0);
   Timer? _recoverRetryTimer;
   Timer? _proactiveRefreshTimer;
@@ -549,6 +551,25 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
     _recoverRetryTimer = null;
     try {
       if (site.id != Constant.kDouyu) {
+        // 非斗鱼平台统一策略（2026-10-10 实测：虎牙 FLV 可跑满 300s、旧地址可复用，
+        // 断流多来自连接层抖动或地址过期）：
+        // 1) 先给底层 lavf 自愈留 2 秒窗口，能自己续上就完全不介入，画面不重刷；
+        // 2) 仍没恢复才刷新一次地址再重放，不再在旧地址上反复 jump。
+        if (from != "end") {
+          await Future.delayed(const Duration(seconds: 2));
+          if (player.state.playing) {
+            Log.d("播放中断($from)，底层已自行恢复，不介入");
+            return;
+          }
+        }
+        if (from != "end" && !_urlRefreshedForRecovery) {
+          _urlRefreshedForRecovery = true;
+          Log.d("非斗鱼平台：播放中断($from)，先刷新地址再重放");
+          final ok = await getPlayUrl();
+          if (ok) {
+            return;
+          }
+        }
         // 其他平台完全按原版节奏：同线路重放两次 → 换线 → 收口；
         // 不做激进的 stop/重签，正常抖动不会被误判成断流频繁重连
         if (mediaErrorRetryCount < 2) {
@@ -695,6 +716,7 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
   void onPlaybackResumed() {
     // 真正播起来才算恢复，重置断流恢复计数与看门狗节拍
     mediaRefreshCount = 0;
+    _urlRefreshedForRecovery = false;
     _stallBeats = 0;
     _retryWaves = 0;
     _recoverRetryTimer?.cancel();
