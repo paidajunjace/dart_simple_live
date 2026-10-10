@@ -523,8 +523,10 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
   /// 直播流地址只在取回那一刻新鲜，反复 jump 旧地址只会循环失败，
   /// 表现为画面反复刷新后停住；重签等价于网页播放器定时刷新取流。
   bool _recovering = false;
-  /// 非斗鱼平台：一次断流周期内只做一次地址刷新，避免刷新失败时反复重取
-  bool _urlRefreshedForRecovery = false;
+  /// 非斗鱼平台：地址刷新冷却时间戳。
+  /// 用时间窗而不是一次性布尔：恢复路径不一定产生 playing 的 false→true 边沿，
+  /// 一次性标志一旦不被重置会永久抑制后续刷新（云端审查 E2 指出）。
+  DateTime _lastUrlRefreshAt = DateTime.fromMillisecondsSinceEpoch(0);
   DateTime _lastRecoverAt = DateTime.fromMillisecondsSinceEpoch(0);
   Timer? _recoverRetryTimer;
   Timer? _proactiveRefreshTimer;
@@ -562,8 +564,10 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
             return;
           }
         }
-        if (from != "end" && !_urlRefreshedForRecovery) {
-          _urlRefreshedForRecovery = true;
+        if (from != "end" &&
+            DateTime.now().difference(_lastUrlRefreshAt) >
+                const Duration(seconds: 30)) {
+          _lastUrlRefreshAt = DateTime.now();
           Log.d("非斗鱼平台：播放中断($from)，先刷新地址再重放");
           final ok = await getPlayUrl();
           if (ok) {
@@ -716,7 +720,8 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
   void onPlaybackResumed() {
     // 真正播起来才算恢复，重置断流恢复计数与看门狗节拍
     mediaRefreshCount = 0;
-    _urlRefreshedForRecovery = false;
+    // 播起来就清零冷却，下一次断流可以立刻刷新
+    _lastUrlRefreshAt = DateTime.fromMillisecondsSinceEpoch(0);
     _stallBeats = 0;
     _retryWaves = 0;
     _recoverRetryTimer?.cancel();
