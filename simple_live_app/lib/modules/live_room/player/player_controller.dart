@@ -72,8 +72,10 @@ mixin PlayerMixin {
       await pp.setProperty('cache-secs', '20');
       // 连接层自愈：断流时由 ffmpeg 原地重连同一地址，
       // 避免上层重建播放器造成画面重刷（虎牙地址实测可复用）
+      // 去掉 reconnect_at_eof：它可能吞掉 EOF，令 completed 事件不再触发，
+      // 从而让 mediaEnd() 与下播判定失效（云端审查 E6 指出）。
       await pp.setProperty('stream-lavf-o',
-          'reconnect=1,reconnect_streamed=1,reconnect_at_eof=1,reconnect_delay_max=5');
+          'reconnect=1,reconnect_streamed=1,reconnect_delay_max=5');
     }
   }
 
