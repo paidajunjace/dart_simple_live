@@ -53,11 +53,13 @@ mixin PlayerMixin {
       }
     }
     if (douyuLive) {
-      // 斗鱼专用激进模式：无 force-seekable(live 走 live 路径)，
-      // 封顶缓冲丢弃已播数据，死连接 15 秒必报错交恢复链重签
-      await pp.setProperty('demuxer-readahead-secs', '5');
+      // 斗鱼：CDN 在连接层掐断长连接（实测单连接 249s，同地址重连 1s 内被拒），
+      // 恢复链换新地址需要 1~3 秒。缓冲必须长于这个空窗，否则换源瞬间黑屏，
+      // 表现就是「必须手动刷新」。readahead 由 5s 提到 12s，并保留 8MiB 回退数据；
+      // 代价是延迟增加数秒，收益是换源期间画面不断。
+      await pp.setProperty('demuxer-readahead-secs', '12');
       await pp.setProperty('demuxer-max-bytes', '32768KiB');
-      await pp.setProperty('demuxer-max-back-bytes', '0');
+      await pp.setProperty('demuxer-max-back-bytes', '8MiB');
       await pp.setProperty('network-timeout', '15');
     } else {
       // 虎牙/抖音/B站等：完全保留原版播放器设置与取流节奏，

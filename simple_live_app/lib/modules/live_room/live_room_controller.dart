@@ -395,22 +395,27 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
 
   Future<bool> getPlayUrl() async {
     try {
-      if (site.id == Constant.kDouyu) {
-        // 斗鱼对登录态取流有单会话连接配额：旧连接被 CDN 掐成半开后仍占着
-        // 会话名额，新签名请求会被静默吞掉。重签前彻底关播放器释放连接。
+      playUrls.clear();
+      currentQualityInfo.value = qualites[currentQuality].quality;
+      currentLineInfo.value = "";
+      currentLineIndex = -1;
+      // 无感续流：先在不拆解码会话的前提下取新地址。
+      // 实测：同一地址重连会在 1 秒内被 CDN 掐断（6 个样本 / 2 个 CDN），
+      // 因此必须换新地址；但 player.stop() 会拆掉解码会话，是黑屏与
+      // 「必须手动刷新」的主因，所以只在取地址失败时才降级为关播放器重试。
+      var playUrl = await site.liveSite.getPlayUrls(
+          detail: detail.value!, quality: qualites[currentQuality]);
+      if (playUrl.urls.isEmpty && site.id == Constant.kDouyu) {
+        Log.d("取地址为空，降级：释放旧连接后重试一次");
         try {
           await player.stop().timeout(const Duration(seconds: 2));
         } catch (e) {
           // 超时也继续：拿不到干净释放也要试新地址
           Log.d("stop 未完成(忽略): $e");
         }
+        playUrl = await site.liveSite.getPlayUrls(
+            detail: detail.value!, quality: qualites[currentQuality]);
       }
-      playUrls.clear();
-      currentQualityInfo.value = qualites[currentQuality].quality;
-      currentLineInfo.value = "";
-      currentLineIndex = -1;
-      var playUrl = await site.liveSite.getPlayUrls(
-          detail: detail.value!, quality: qualites[currentQuality]);
       if (playUrl.urls.isEmpty) {
         SmartDialog.showToast("无法读取播放地址");
         return false;
@@ -735,7 +740,7 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
       if (_recovering) {
         return;
       }
-      // 纳入恢复锁：getPlayUrl 里的 player.stop 会引发 completed 事件，
+      // 纳入恢复锁：取地址失败时的降级 stop 会引发 completed 事件，
       // 不加锁会再拉起一条并行的恢复链
       _recovering = true;
       _lastRecoverAt = DateTime.now();
