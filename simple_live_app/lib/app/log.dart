@@ -67,7 +67,7 @@ class Log {
     addDebugLog(message, Colors.blue);
     logger.i("${DateTime.now().toString()}\n$message");
     if (writeFile) {
-      logFileWriter?.write("[INFO] $_currentTime：$message");
+      // 原实现这里写了一次、writeLog 又写一次，文件里每行 INFO 重复
       writeLog(message, Level.info);
     }
   }
