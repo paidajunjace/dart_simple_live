@@ -1,0 +1,25 @@
+name: app-ci
+
+on:
+  push:
+    paths:
+      - 'simple_live_app/**'
+      - '.github/workflows/app-ci.yml'
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  analyze:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version-file: simple_live_app/.fvmrc
+          channel: stable
+      - name: pub get
+        working-directory: simple_live_app
+        run: flutter pub get
+      - name: analyze live_room
+        working-directory: simple_live_app
+        run: flutter analyze --no-fatal-infos lib/modules/live_room/

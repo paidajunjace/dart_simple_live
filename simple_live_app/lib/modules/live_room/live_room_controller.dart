@@ -457,6 +457,11 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
     }
 
     Log.d("播放结束");
+    // 重试用尽仍然断流：重新向站点取地址再起一次。
+    // 斗鱼多数房间只下发一条线路，没有这一级就会在直播仍在进行时直接判定结束。
+    if (await refreshPlayUrlsAndRestart()) {
+      return;
+    }
     // 遍历线路，如果全部链接都断开就是直播结束了
     if (playUrls.length - 1 == currentLineIndex) {
       liveStatus.value = false;
@@ -483,6 +488,11 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
       return;
     }
 
+    // 重试用尽仍然失败：重新取地址再试一次，取不到才按原逻辑收尾
+    if (await refreshPlayUrlsAndRestart()) {
+      return;
+    }
+
     if (playUrls.length - 1 == currentLineIndex) {
       errorMsg.value = "播放失败";
       SmartDialog.showToast("播放失败:$error");
@@ -490,6 +500,36 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
       //currentLineIndex += 1;
       //setPlayer();
       changePlayLine(currentLineIndex + 1);
+    }
+  }
+
+  /// 断流后的最后一级恢复：重新向站点取地址并重建播放列表。
+  ///
+  /// 返回 false 表示这次也取不到地址，调用方按原逻辑收尾。
+  /// 连接被直播 CDN 掐断是常态（实测约 300 秒一次），签名参数长期有效，
+  /// 所以这里只需要重新取地址，不需要重新进房间。
+  Future<bool> refreshPlayUrlsAndRestart() async {
+    if (detail.value == null || qualites.isEmpty) {
+      return false;
+    }
+    try {
+      var result = await site.liveSite.getPlayUrls(
+        detail: detail.value!,
+        quality: qualites[currentQuality],
+      );
+      if (result.urls.isEmpty) {
+        return false;
+      }
+      playUrls.value = result.urls;
+      playHeaders = result.headers;
+      currentLineIndex = 0;
+      mediaErrorRetryCount = 0;
+      Log.d("已重新获取播放地址，重新开始播放");
+      initPlaylist();
+      return true;
+    } catch (e) {
+      Log.logPrint(e);
+      return false;
     }
   }
 
