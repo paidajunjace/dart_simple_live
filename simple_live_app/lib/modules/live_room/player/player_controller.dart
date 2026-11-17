@@ -43,14 +43,13 @@ mixin PlayerMixin {
   /// 初始化播放器并设置 ao 参数
   Future<void> initializePlayer() async {
     var pp = player.platform as NativePlayer;
-    // 设置音频输出驱动
-    if (AppSettingsController.instance.customPlayerOutput.value) {
-      if (player.platform is NativePlayer) {
-        await (player.platform as dynamic).setProperty(
-          'ao',
-          AppSettingsController.instance.audioOutputDriver.value,
-        );
-      }
+    // 设置音频输出驱动：不再受「自定义播放器输出」门控。
+    // 原来只有打开自定义输出才下发 ao，用户在设置里单独改音频驱动根本不生效；
+    // 而华为 HarmonyOS/部分平板上 audiotrack 常常起不来，表现为画面正常但完全没声音。
+    var ao = AppSettingsController.instance.audioOutputDriver.value;
+    if (player.platform is NativePlayer && ao.isNotEmpty && ao != "auto") {
+      await (player.platform as dynamic).setProperty('ao', ao);
+      Log.d("音频输出驱动 ao=" + ao);
     }
     if (douyuLive) {
       // 斗鱼：CDN 在连接层掐断长连接（实测单连接 249s，同地址重连 1s 内被拒），
@@ -700,12 +699,43 @@ class PlayerController extends BaseController
   StreamSubscription? _logSubscription;
   StreamSubscription? _playingSubscription;
 
+  /// 音频输出设备起不来时的自愈：依次换别的 ao 驱动。
+  /// mpv 报 "Could not open/initialize audio device -> no sound." 就说明当前 ao
+  /// 在这台设备上不可用（华为 HarmonyOS 上 audiotrack 常见）。
+  /// 只切 ao 不重开媒体不会立刻生效，所以同时提示用户重进直播间。
+  bool _audioFallbackTried = false;
+  Future<void> _recoverAudioOutput() async {
+    if (_audioFallbackTried) {
+      return;
+    }
+    _audioFallbackTried = true;
+    var current = AppSettingsController.instance.audioOutputDriver.value;
+    for (var ao in ["opensles", "sdl", "audiotrack"]) {
+      if (ao == current) {
+        continue;
+      }
+      try {
+        await (player.platform as dynamic).setProperty("ao", ao);
+        AppSettingsController.instance.setAudioOutputDriver(ao);
+        Log.e("音频设备初始化失败(原 ao=" + current + ")，已切到 " + ao, StackTrace.current);
+        SmartDialog.showToast("设备音频初始化失败，已切到 " + ao + "，请退出重进直播间");
+        return;
+      } catch (e) {
+        Log.logPrint("切换 ao=" + ao + " 失败: " + e);
+      }
+    }
+    SmartDialog.showToast("设备音频初始化失败，opensles/sdl/audiotrack 均不可用");
+  }
+
   void initStream() {
     _errorSubscription = player.stream.error.listen((event) {
       Log.d("播放器错误：$event");
       // 跳过无音频输出的错误
       // Could not open/initialize audio device -> no sound.
       if (event.contains('no sound.')) {
+        // 原来这里直接 return：音频设备起不来时画面照常播放但完全静音，
+        // 用户只感到「没有声音」，日志里也只有一行被忽略的错误。
+        _recoverAudioOutput();
         return;
       }
       // 直播流打开时 media_kit 自动 seek，mpv 报的 seek 指令错误
