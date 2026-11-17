@@ -15,8 +15,10 @@ import 'package:simple_live_core/src/model/live_search_result.dart';
 import 'package:simple_live_core/src/model/live_room_detail.dart';
 import 'package:simple_live_core/src/model/live_play_quality.dart';
 import 'package:simple_live_core/src/model/live_category_result.dart';
-import 'package:html_unescape/html_unescape.dart';
 import 'package:simple_live_core/src/scripts/douyu_sign.dart';
+import 'package:simple_live_core/src/common/core_error.dart';
+import 'package:simple_live_core/src/common/core_log.dart';
+import 'package:simple_live_core/src/douyu/douyu_play_parser.dart';
 
 class DouyuSite implements LiveSite {
   @override
@@ -139,15 +141,29 @@ class DouyuSite implements LiveSite {
     var data = quality.data as DouyuPlayData;
 
     List<String> urls = [];
+    List<String> failures = [];
     for (var item in data.cdns) {
-      var url = await getPlayUrl(detail.roomId, args, data.rate, item);
-      if (url.isNotEmpty) {
-        urls.add(url);
+      try {
+        var url = await getPlayUrl(detail.roomId, args, data.rate, item);
+        if (url.isNotEmpty && !urls.contains(url)) {
+          urls.add(url);
+        }
+      } catch (e) {
+        // 单条线路失败不再中断整个循环，避免一条 cdn 异常导致整个房间没有地址
+        failures.add('$item -> $e');
+        CoreLog.d('斗鱼取流失败 room=${detail.roomId} rate=${data.rate} cdn=$item err=$e');
       }
+    }
+    if (urls.isEmpty) {
+      CoreLog.d('斗鱼全部线路取流失败 room=${detail.roomId} '
+          'rate=${data.rate} failures=${failures.join(' | ')}');
     }
     return LivePlayUrl(urls: urls);
   }
 
+  /// 取单条线路的播放地址。
+  ///
+  /// 业务失败或响应结构异常时抛 [CoreError]，不再抛 NoSuchMethodError。
   Future<String> getPlayUrl(
     String roomId,
     String args,
@@ -166,7 +182,19 @@ class DouyuSite implements LiveSite {
       formUrlEncoded: true,
     );
 
-    return "${result["data"]["rtmp_url"]}/${HtmlUnescape().convert(result["data"]["rtmp_live"].toString())}";
+    Map<Object?, Object?>? body;
+    if (result is Map) {
+      body = Map<Object?, Object?>.from(result);
+    }
+    var businessError = DouyuPlayParser.describeError(body);
+    if (businessError != null) {
+      throw CoreError('斗鱼取流失败(cdn=$cdn): $businessError');
+    }
+    var url = DouyuPlayParser.parseUrl(body);
+    if (url == null || url.isEmpty) {
+      throw CoreError('斗鱼未返回可用播放地址(cdn=$cdn)');
+    }
+    return url;
   }
 
   @override

@@ -1,0 +1,27 @@
+name: core-ci
+
+on:
+  push:
+    paths:
+      - 'simple_live_core/**'
+      - '.github/workflows/core-ci.yml'
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  core:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dart-lang/setup-dart@v1
+        with:
+          sdk: stable
+      - name: pub get
+        working-directory: simple_live_core
+        run: dart pub get
+      - name: analyze
+        working-directory: simple_live_core
+        run: dart analyze --fatal-warnings
+      - name: unit tests (offline)
+        working-directory: simple_live_core
+        run: dart test test/douyu_play_parser_test.dart

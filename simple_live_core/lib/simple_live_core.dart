@@ -5,6 +5,7 @@ export 'src/interface/live_danmaku.dart';
 export 'src/huya_site.dart';
 export 'src/bilibili_site.dart';
 export 'src/douyu_site.dart';
+export 'src/douyu/douyu_play_parser.dart';
 export 'src/douyin_site.dart';
 export 'src/common/core_log.dart';
 export 'src/model/live_message.dart';
