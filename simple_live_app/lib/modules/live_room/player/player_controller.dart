@@ -721,7 +721,7 @@ class PlayerController extends BaseController
         SmartDialog.showToast("设备音频初始化失败，已切到 " + ao + "，请退出重进直播间");
         return;
       } catch (e) {
-        Log.logPrint("切换 ao=" + ao + " 失败: " + e);
+        Log.logPrint("切换 ao=" + ao + " 失败: " + e.toString());
       }
     }
     SmartDialog.showToast("设备音频初始化失败，opensles/sdl/audiotrack 均不可用");
