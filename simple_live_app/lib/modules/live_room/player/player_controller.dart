@@ -981,7 +981,7 @@ class PlayerController extends BaseController
     await resetSystem();
     // 两个槽都要收，只收当前槽会留下一个在后台解码
     await _slotA?.player.dispose();
-    await _slotB?.player.dispose();
+    await slotB?.player.dispose();
     super.onClose();
   }
 }
