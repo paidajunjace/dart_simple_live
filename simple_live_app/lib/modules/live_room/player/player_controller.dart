@@ -15,6 +15,7 @@ import 'package:canvas_danmaku/canvas_danmaku.dart';
 import 'package:volume_controller/volume_controller.dart';
 import 'package:screen_brightness/screen_brightness.dart';
 import 'package:simple_live_app/app/controller/app_settings_controller.dart';
+import 'package:simple_live_app/modules/live_room/player/engine_probe.dart';
 import 'package:simple_live_app/app/controller/base_controller.dart';
 import 'package:simple_live_app/app/custom_throttle.dart';
 import 'package:simple_live_app/app/log.dart';
@@ -876,6 +877,24 @@ class PlayerController extends BaseController
       title: "播放信息",
       child: ListView(
         children: [
+          ListTile(
+            title: const Text("fvp 引擎自检"),
+            subtitle: const Text("用 mdk 打开当前地址，量首帧耗时（实验）"),
+            onTap: () async {
+              final medias = player.state.playlist.medias;
+              if (medias.isEmpty) {
+                SmartDialog.showToast("当前没有播放地址");
+                return;
+              }
+              final m = medias.first;
+              SmartDialog.showLoading(msg: "fvp 自检中");
+              final r = await EngineProbe.run(m.uri, headers: m.httpHeaders);
+              SmartDialog.dismiss(status: SmartStatus.loading);
+              Log.d(r);
+              Utils.copyToClipboard(r);
+              SmartDialog.showToast("fvp 自检结果已复制到剪贴板");
+            },
+          ),
           ListTile(
             title: const Text("Resolution"),
             subtitle: Text('${player.state.width}x${player.state.height}'),

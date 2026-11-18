@@ -10,6 +10,10 @@ dependencies:
     path: ../simple_live_core
   # 图标
   cupertino_icons: ^1.0.8
+  # 实验性第二播放引擎（mdk-sdk）。原地换源不重建渲染目标，用播放信息里的自检对比
+  fvp: 0.40.0
+  # fvp 通过 video_player 平台接口工作，直接调官方 API 做自检
+  video_player: ^2.9.0
   remixicon: ^1.4.1 #Remix图标
 
   # 框架、工具
