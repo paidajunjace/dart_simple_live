@@ -816,6 +816,7 @@ class PlayerController extends BaseController
   /// 返回 true 表示已就绪，可以切层；false 表示这次只能走老办法重开。
   Future<bool> warmUpSlot(String url, Map<String, String>? headers) async {
     final slot = inactiveSlot;
+    final sw = Stopwatch()..start();
     try {
       await applyPlayerPropertiesTo(slot.player);
       await slot.player.open(Media(url, httpHeaders: headers));
@@ -823,7 +824,8 @@ class PlayerController extends BaseController
         await Future.delayed(const Duration(milliseconds: 250));
         final w = slot.player.state.width ?? 0;
         if (w > 0 || slot.player.state.playing) {
-          Log.d("备用槽 ${slot.id} 就绪 ${w}x${slot.player.state.height}");
+          Log.d(
+              "备用槽 ${slot.id} 就绪 ${w}x${slot.player.state.height} 耗时${sw.elapsedMilliseconds}ms");
           return true;
         }
       }

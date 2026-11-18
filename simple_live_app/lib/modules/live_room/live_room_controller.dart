@@ -487,6 +487,8 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
       // 已有画面在播 = 这是一次续流，开始计时黑屏窗口
       _renewStartedAt = DateTime.now();
     }
+    // 与 fvp 自检同口径：从发起 open 到出画面
+    final openSw = Stopwatch()..start();
     try {
       if (douyuLive) {
         // 斗鱼：只 open 单条媒体。Playlist 自动前进会与恢复链竞争，
@@ -517,6 +519,7 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
       await Future.delayed(const Duration(milliseconds: 500));
       // PlayerState 无 error 字段；playing=true 或探测到视频宽高即生效
       if (player.state.playing || (player.state.width ?? 0) > 0) {
+        Log.d("首帧耗时 ${openSw.elapsedMilliseconds}ms（media_kit 线路${currentLineIndex + 1}）");
         return true;
       }
     }
