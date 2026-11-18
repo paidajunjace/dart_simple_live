@@ -577,7 +577,8 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
   /// 旧做法是直接在播着的实例上 open()，mpv 拆解码器 → 黑 1~3 秒，
   /// 所以观感是「黑一下再刷新」。这里全程不动正在播的画面。
   Future<bool> seamlessRenew() async {
-    if (site.id != Constant.kDouyu || detail.value == null) {
+    // 全平台可用：虎牙网页版也是「原地重连 + 换签名」，我们这边等价物就是备用槽
+    if (detail.value == null) {
       return false;
     }
     try {
@@ -595,7 +596,7 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
       if (AppSettingsController.instance.playerForceHttps.value) {
         url = url.replaceAll("http://", "https://");
       }
-      douyuLive = true;
+      douyuLive = site.id == Constant.kDouyu;
       final ready = await warmUpSlot(url, playHeaders);
       if (!ready) {
         return false;
@@ -677,7 +678,10 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
             DateTime.now().difference(_lastUrlRefreshAt) >
                 const Duration(seconds: 30)) {
           _lastUrlRefreshAt = DateTime.now();
-          Log.d("非斗鱼平台：播放中断($from)，先刷新地址再重放");
+          Log.d("非斗鱼平台：播放中断($from)，先无缝换源");
+          if (await seamlessRenew()) {
+            return;
+          }
           final ok = await getPlayUrl();
           if (ok) {
             return;
