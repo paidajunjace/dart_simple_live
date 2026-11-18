@@ -30,11 +30,12 @@ class DouyuSite implements LiveSite {
   /// 用户从浏览器导入的登录 Cookie（含 dy_did 等），为空则用匿名方式观看
   String cookie = "";
 
-  /// 缓存本次进房的加密脚本与房间号：getPlayUrls 每次现签新时间戳，
-  /// 不复用 detail.data 里进房时那份旧签名（06:47 事故的直接原因：
-  /// 主动重签沿用了 10 分钟前的旧 tt，被斗鱼拒签）
-  String _crptext = "";
-  String _crpRoomId = "";
+  /// 每个房间一份加密脚本。旧实现是单槽（_crptext/_crpRoomId），
+  /// 任意其他房间的 getRoomDetail 都会把它覆盖：播放中的房间随后取不到
+  /// 自己的脚本，重签入口条件不成立，静默退回进房时那份旧签名，
+  /// 斗鱼以 error=-9 时间戳错误拒签，两条线路同时失败（2026-11-18 13:58 日志实测：
+  /// 关注列表刷新把脚本换成了 217331 的，48699 的主动重签随即失败）
+  final Map<String, String> _crpTexts = {};
 
   @override
   LiveDanmaku getDanmaku() => DouyuDanmaku();
@@ -153,14 +154,19 @@ class DouyuSite implements LiveSite {
     required LivePlayQuality quality,
   }) async {
     var args = detail.data.toString();
-    if (_crptext.isNotEmpty && _crpRoomId == detail.roomId) {
-      // 用缓存的加密脚本现签一个全新时间戳，替换可能已陈旧的旧签名串
+    final crptext = await _ensureCrpText(detail.roomId);
+    if (crptext != null) {
+      // 用本房间的加密脚本现签一个全新时间戳，替换可能已陈旧的旧签名串
       try {
-        args = DouyuSign.getSign(_crptext, detail.roomId,
+        args = DouyuSign.getSign(crptext, detail.roomId,
             dyDid: _extractDyDid());
       } catch (e) {
         CoreLog.error("斗鱼现签失败，退回旧签名串: $e");
       }
+    } else {
+      // 拿不到脚本只能吃进房时那份旧签名，斗鱼大概率回 -9；
+      // 这条分支以前完全静默，日志里只剩「无法读取播放地址」
+      CoreLog.error("斗鱼现签：无 room${detail.roomId} 加密脚本，本次只能用旧签名");
     }
     if (args.isEmpty) {
       // detail.data 是签名产物；空值说明本地签名环节出了问题，
@@ -214,6 +220,32 @@ class DouyuSite implements LiveSite {
       urls: lines.map((l) => l.url).toList(),
       headers: playHeaders(detail.roomId),
     );
+  }
+
+  /// 取本房间的加密脚本：缓存优先，缺了现拉一次 homeH5Enc 自愈。
+  /// 返回 null 表示确实拿不到（调用方要按旧签名兜底并留痕）
+  Future<String?> _ensureCrpText(String roomId) async {
+    final cached = _crpTexts[roomId];
+    if (cached != null && cached.isNotEmpty) {
+      return cached;
+    }
+    try {
+      final text = await HttpClient.instance.getText(
+        "https://www.douyu.com/swf_api/homeH5Enc?rids=$roomId",
+        queryParameters: {},
+        header: playHeaders(roomId),
+      );
+      final script = json.decode(text)["data"]?["room$roomId"]?.toString();
+      if (script != null && script.isNotEmpty) {
+        _crpTexts[roomId] = script;
+        CoreLog.d("斗鱼现签：补拉 room$roomId 加密脚本成功");
+        return script;
+      }
+      CoreLog.error("斗鱼现签：homeH5Enc 里没有 room$roomId");
+    } catch (e) {
+      CoreLog.error("斗鱼现签：补拉 homeH5Enc 失败 ${e.toString()}");
+    }
+    return null;
   }
 
   static const String kWebUserAgent =
@@ -356,8 +388,8 @@ class DouyuSite implements LiveSite {
       },
     );
     var crptext = json.decode(jsEncResult)["data"]["room$roomId"].toString();
-    _crptext = crptext;
-    _crpRoomId = roomId;
+    // 只登记本房间的脚本，不碰其它房间的（否则会把正在播放的房间挤掉）
+    _crpTexts[roomId] = crptext;
 
     if (showTime != null && showTime.isNotEmpty) {
       try {

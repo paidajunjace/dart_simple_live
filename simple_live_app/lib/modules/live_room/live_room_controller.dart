@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:flutter/material.dart';
@@ -77,6 +78,15 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
   /// 当前线路
   var currentLineIndex = -1;
   var currentLineInfo = "".obs;
+
+  /// 续流期间的冻结帧：换源会拆掉解码会话，Android surface 在首帧到达前是黑的。
+  /// 换源前先抓一张当前画面当占位，首帧回来立刻撤掉。null = 没有遮挡
+  final Rx<Uint8List?> holdFrame = Rx<Uint8List?>(null);
+  Timer? _holdFrameGuard;
+
+  /// 本次续流开始时刻（进入 open 前），用于量化黑屏窗口
+  DateTime? _renewStartedAt;
+  int _renewCount = 0;
 
   /// 退出倒计时
   var countdown = 60.obs;
@@ -406,6 +416,8 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
       var playUrl = await site.liveSite.getPlayUrls(
           detail: detail.value!, quality: qualites[currentQuality]);
       if (playUrl.urls.isEmpty && site.id == Constant.kDouyu) {
+        // stop 会拆解码会话，先把画面抓下来盖住
+        await _captureHoldFrame();
         Log.d("取地址为空，降级：释放旧连接后重试一次");
         try {
           await player.stop().timeout(const Duration(seconds: 2));
@@ -464,9 +476,17 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
     // 播放器按平台分支取参数：斗鱼激进续流参数，其他平台原版参数
     douyuLive = site.id == Constant.kDouyu;
 
+    // 黑屏修复：先把当前画面抓下来当占位，再动播放器。
+    // 只在此刻已有画面时才抓，首开时抓不到也不会阻塞启动。
+    await _captureHoldFrame();
+
     // 初始化播放器并设置 ao 参数
     await initializePlayer();
 
+    if (player.state.playing) {
+      // 已有画面在播 = 这是一次续流，开始计时黑屏窗口
+      _renewStartedAt = DateTime.now();
+    }
     try {
       if (douyuLive) {
         // 斗鱼：只 open 单条媒体。Playlist 自动前进会与恢复链竞争，
@@ -502,6 +522,55 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
     }
     Log.d("播放切换校验超时(8s)，判定本次取流未生效");
     return false;
+  }
+
+  /// 抓当前画面作为续流占位帧。幂等：已有占位帧就不再抓
+  Future<void> _captureHoldFrame() async {
+    if (holdFrame.value != null) {
+      return;
+    }
+    if (!player.state.playing) {
+      // 首开或画面已死透：没有可抓的帧，交给正常黑屏路径
+      return;
+    }
+    try {
+      final bytes =
+          await player.screenshot().timeout(const Duration(seconds: 2));
+      if (bytes == null || bytes.isEmpty) {
+        Log.d("续流遮挡：抓帧为空，跳过");
+        return;
+      }
+      holdFrame.value = bytes;
+      Log.d("续流遮挡：已抓取占位帧 ${bytes.lengthInBytes}B");
+      // 兜底：迟迟恢复不了就别一直盖着，交回真实画面
+      _holdFrameGuard?.cancel();
+      _holdFrameGuard = Timer(const Duration(seconds: 20), () {
+        if (holdFrame.value != null) {
+          Log.d("续流遮挡：20s 未恢复，撤掉占位帧");
+          holdFrame.value = null;
+        }
+      });
+    } catch (e) {
+      Log.d("续流遮挡：抓帧失败 ${e.toString()}");
+    }
+  }
+
+  /// 画面真正回来时撤掉占位帧，并记录本次黑屏窗口时长
+  void _releaseHoldFrame(String why) {
+    _holdFrameGuard?.cancel();
+    _holdFrameGuard = null;
+    if (holdFrame.value != null) {
+      Log.d("续流遮挡：撤掉占位帧($why)");
+      holdFrame.value = null;
+    }
+    final started = _renewStartedAt;
+    if (started != null) {
+      _renewStartedAt = null;
+      _renewCount += 1;
+      Log.d(
+        "续流黑屏窗口 ${DateTime.now().difference(started).inMilliseconds}ms（第$_renewCount 次续流）",
+      );
+    }
   }
 
   Future<void> setPlayer() async {
@@ -718,6 +787,8 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
 
   @override
   void onPlaybackResumed() {
+    // 画面回来了：撤掉续流占位帧，记录黑屏窗口
+    _releaseHoldFrame("resumed");
     // 真正播起来才算恢复，重置断流恢复计数与看门狗节拍
     mediaRefreshCount = 0;
     // 播起来就清零冷却，下一次断流可以立刻刷新
@@ -1357,6 +1428,7 @@ ${error?.stackTrace}''');
     danmakuController = null;
     _liveDurationTimer?.cancel(); // 页面关闭时取消定时器
     stopStallWatchdog();
+    _holdFrameGuard?.cancel();
     _recoverRetryTimer?.cancel();
     cancelProactiveRefresh();
     super.onClose();

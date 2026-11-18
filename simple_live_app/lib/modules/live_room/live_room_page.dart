@@ -271,6 +271,25 @@ class LiveRoomPage extends GetView<LiveRoomController> {
           // 自己实现
           wakelock: false,
         ),
+        // 续流占位帧：换源/断流恢复期间盖住黑屏，首帧回来即撤（黑屏修复）
+        Obx(
+          () {
+            final frame = controller.holdFrame.value;
+            if (frame == null) {
+              return const SizedBox.shrink();
+            }
+            return Positioned.fill(
+              child: IgnorePointer(
+                child: Image.memory(
+                  frame,
+                  fit: boxFit,
+                  gaplessPlayback: true,
+                  alignment: Alignment.center,
+                ),
+              ),
+            );
+          },
+        ),
         Obx(
           () => Visibility(
             visible: !controller.liveStatus.value,
