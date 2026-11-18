@@ -256,20 +256,45 @@ class LiveRoomPage extends GetView<LiveRoomController> {
     }
     return Stack(
       children: [
-        Video(
-          key: controller.globalPlayerKey,
-          controller: controller.videoController,
-          pauseUponEnteringBackgroundMode:
-              AppSettingsController.instance.playerAutoPause.value,
-          resumeUponEnteringForegroundMode:
-              AppSettingsController.instance.playerAutoPause.value,
-          controls: (state) {
-            return playerControls(state, controller);
+        // 两槽各一层 Video：主槽常驻，备用槽建好后常驻但隐藏。
+        // 换源只切可见性、不动 controller，避免重建上传纹理导致黑屏
+        Obx(
+          () {
+            final b = controller.slotB;
+            final activeIsB = controller.activeSlotId.value == 1 && b != null;
+            Widget layer(Key key, VideoController vc, bool visible) {
+              return Offstage(
+                offstage: !visible,
+                child: Video(
+                  key: key,
+                  controller: vc,
+                  pauseUponEnteringBackgroundMode:
+                      AppSettingsController.instance.playerAutoPause.value,
+                  resumeUponEnteringForegroundMode:
+                      AppSettingsController.instance.playerAutoPause.value,
+                  controls: (state) {
+                    return playerControls(state, controller);
+                  },
+                  aspectRatio: aspectRatio,
+                  fit: boxFit,
+                  // 自己实现
+                  wakelock: false,
+                ),
+              );
+            }
+
+            return Stack(
+              children: [
+                layer(
+                  controller.globalPlayerKey,
+                  controller.slotA.video,
+                  !activeIsB,
+                ),
+                if (b != null)
+                  layer(controller.warmPlayerKey, b.video, activeIsB),
+              ],
+            );
           },
-          aspectRatio: aspectRatio,
-          fit: boxFit,
-          // 自己实现
-          wakelock: false,
         ),
         // 续流占位帧：换源/断流恢复期间盖住黑屏，首帧回来即撤（黑屏修复）
         Obx(
