@@ -850,22 +850,20 @@ class PlayerController extends BaseController
         return false;
       }
       {
-        // settle 期间新槽也在放音，不静音就是两路声音叠在一起
+        // 备用槽这段时间要出声就会双声道，先静音
         try {
           await slot.player.setVolume(0);
         } catch (e) {
           Log.logPrint(e);
         }
-        // 新连接从 CDN 最近关键帧起播，比旧流显示位置早一个 GOP，
-        // 立刻切会「重复几秒前」。让新槽继续播一个 GOP 的时长再切，
-        // 重复窗口就被吃掉（旧槽这段时间照常播，用户看着原画面）。
-        final settle = const Duration(milliseconds: 3500);
-        await Future.delayed(settle);
-        if (!slot.player.state.playing) {
-          Log.d("备用槽 ${slot.id} settle 期间停了，放弃");
+        // 对齐：新连接从最近关键帧起播，位置比旧流当前画面靠前。
+        // 读两槽的 video-pts，若同一条时间轴就等新槽追平旧槽再切，
+        // 否则退回经验值（一个 GOP 的一半），把重复窗口压到最小。
+        final aligned = await _alignWarmSlot(slot);
+        if (!aligned) {
+          Log.d("备用槽 ${slot.id} 对齐期间停了，放弃");
           return false;
         }
-        Log.d("备用槽 ${slot.id} settle ${settle.inMilliseconds}ms 完成");
         return true;
       }
       Log.d("备用槽 ${slot.id} 8 秒未出画面，放弃");
@@ -879,6 +877,52 @@ class PlayerController extends BaseController
       Log.logPrint(e);
       return false;
     }
+  }
+
+  /// 读 mpv 的 video-pts（秒）。两槽若在同一条时间轴上，直接可比
+  Future<double?> _readPts(Player target) async {
+    try {
+      final raw =
+          await (target.platform as NativePlayer).getProperty('video-pts');
+      return double.tryParse(raw ?? '');
+    } catch (e) {
+      return null;
+    }
+  }
+
+  /// 把备用槽对齐到当前槽的播放位置，返回是否仍然在播
+  Future<bool> _alignWarmSlot(PlaybackSlot slot) async {
+    final oldPts = await _readPts(player);
+    final newPts = await _readPts(slot.player);
+    final comparable = oldPts != null &&
+        newPts != null &&
+        (newPts - oldPts).abs() < 600 &&
+        newPts <= oldPts + 600;
+    if (!comparable) {
+      // 时间轴不可比（或新槽已经更靠前）：只等半个 GOP 的经验值
+      Log.d("对齐：pts 不可比（新$newPts 旧$oldPts），等 1200ms");
+      await Future.delayed(const Duration(milliseconds: 1200));
+      return slot.player.state.playing;
+    }
+    final sw = Stopwatch()..start();
+    while (sw.elapsedMilliseconds < 6000) {
+      final o = await _readPts(player);
+      final n = await _readPts(slot.player);
+      if (o == null || n == null) {
+        Log.d("对齐：pts 读取中断，按 800ms 兜底");
+        await Future.delayed(const Duration(milliseconds: 800));
+        break;
+      }
+      if (n >= o) {
+        Log.d("对齐：新槽追平（新$n 旧$o）用时${sw.elapsedMilliseconds}ms");
+        break;
+      }
+      await Future.delayed(const Duration(milliseconds: 200));
+    }
+    if (sw.elapsedMilliseconds >= 6000) {
+      Log.d("对齐：6 秒未追平，按超时切");
+    }
+    return slot.player.state.playing;
   }
 
   /// 切到备用槽：新槽已经有画面，切层不出黑。
