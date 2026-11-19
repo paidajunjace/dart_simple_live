@@ -23,7 +23,7 @@ jobs:
       - name: Fetch Xposed API 82
         working-directory: tools/xposed
         run: |
-          curl -sSL -o api-82.jar https://repo1.maven.org/maven2/de/robv/android/xposed/api/82/api-82.jar
+          cp api-82.jar ../api-82.jar 2>/dev/null || true
           ls -l api-82.jar && unzip -l api-82.jar | head -5
       - name: Compile dex and package
         working-directory: tools/xposed
