@@ -823,6 +823,9 @@ class PlayerController extends BaseController
     try {
       await applyPlayerPropertiesTo(slot.player);
       await slot.player.open(Media(url, httpHeaders: headers));
+      // 新实例默认 100%，切过去会突然变响；跟用户设置对齐
+      await slot.player
+          .setVolume(AppSettingsController.instance.playerVolume.value);
       var ready = false;
       for (var i = 0; i < 32; i++) {
         await Future.delayed(const Duration(milliseconds: 250));
@@ -880,17 +883,41 @@ class PlayerController extends BaseController
     if (identical(warm, old)) {
       return;
     }
+    // 先静音旧槽再切：两路同时出画面时就是两个声音，用户听得出
+    try {
+      await old.player.setVolume(0);
+    } catch (e) {
+      Log.logPrint(e);
+    }
     activeSlotId.value = warm.id;
     // 事件订阅原本绑在旧槽上，换槽必须重绑，否则播放事件全断
     disposeStream();
     initStream();
     Log.d("已切到备用槽 ${warm.id}");
-    await Future<void>.delayed(const Duration(seconds: 3));
+    // 立刻停旧槽。以前留 3 秒退路，代价是 3 秒双声道
     try {
       await old.player.pause();
     } catch (e) {
       Log.logPrint(e);
     }
+    await Future<void>.delayed(const Duration(milliseconds: 1500));
+    if (!player.state.playing) {
+      // 新槽没接住，退回旧槽并把音量还回去
+      Log.d("新槽切后 1.5s 未播，回退旧槽");
+      try {
+        await warm.player.pause();
+        await old.player
+            .setVolume(AppSettingsController.instance.playerVolume.value);
+        await old.player.play();
+      } catch (e) {
+        Log.logPrint(e);
+      }
+      activeSlotId.value = old.id;
+      disposeStream();
+      initStream();
+      return;
+    }
+    Log.d("备用槽 ${warm.id} 接管确认");
   }
 
   void mediaEnd() {
