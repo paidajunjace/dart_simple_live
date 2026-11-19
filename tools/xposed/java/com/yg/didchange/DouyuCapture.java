@@ -109,20 +109,26 @@ final class DouyuCapture {
             return;
         }
         sPathResolved = true;
-        String[] dirs = new String[3];
+        String[] dirs = new String[4];
         try {
             Application app = AndroidAppHelper.currentApplication();
             if (app != null) {
+                // Android 11+ 里 Android/media/<pkg> 对其它进程/MTP 可见，
+                // 抓包日志放这儿，主机侧不用 root 也能直接读
+                File[] mediaDirs = app.getExternalMediaDirs();
+                if (mediaDirs != null && mediaDirs.length > 0 && mediaDirs[0] != null) {
+                    dirs[0] = mediaDirs[0].getAbsolutePath();
+                }
                 File ext = app.getExternalFilesDir(null);
                 if (ext != null) {
-                    dirs[0] = ext.getAbsolutePath();
+                    dirs[1] = ext.getAbsolutePath();
                 }
-                dirs[1] = app.getFilesDir().getAbsolutePath();
+                dirs[2] = app.getFilesDir().getAbsolutePath();
             }
         } catch (Throwable t) {
             log("取 Context 失败: " + t);
         }
-        dirs[2] = "/sdcard";
+        dirs[3] = "/sdcard";
         for (String d : dirs) {
             if (d == null) {
                 continue;
