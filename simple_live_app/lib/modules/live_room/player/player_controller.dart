@@ -850,6 +850,12 @@ class PlayerController extends BaseController
         return false;
       }
       {
+        // settle 期间新槽也在放音，不静音就是两路声音叠在一起
+        try {
+          await slot.player.setVolume(0);
+        } catch (e) {
+          Log.logPrint(e);
+        }
         // 新连接从 CDN 最近关键帧起播，比旧流显示位置早一个 GOP，
         // 立刻切会「重复几秒前」。让新槽继续播一个 GOP 的时长再切，
         // 重复窗口就被吃掉（旧槽这段时间照常播，用户看着原画面）。
@@ -893,6 +899,12 @@ class PlayerController extends BaseController
     // 事件订阅原本绑在旧槽上，换槽必须重绑，否则播放事件全断
     disposeStream();
     initStream();
+    try {
+      await player
+          .setVolume(AppSettingsController.instance.playerVolume.value);
+    } catch (e) {
+      Log.logPrint(e);
+    }
     Log.d("已切到备用槽 ${warm.id}");
     // 立刻停旧槽。以前留 3 秒退路，代价是 3 秒双声道
     try {
