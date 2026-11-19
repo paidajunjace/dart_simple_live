@@ -41,7 +41,7 @@ jobs:
           "$BT/aapt2" link -o build/base.apk -I "$AJAR" --manifest AndroidManifest.xml -R build/res.zip --auto-add-overlay
           cd build
           zip -j base.apk dex/classes.dex
-          cp -r ../assets ../res_only 2>/dev/null || true
+          cp -r ../assets .
           zip -r base.apk assets >/dev/null
           keytool -genkeypair -keystore ks.jks -alias k -keyalg RSA -keysize 2048 -validity 10000 -storepass androidpass -keypass androidpass -dname "CN=xposed-module"
           "$BT/zipalign" -f 4 base.apk aligned.apk
