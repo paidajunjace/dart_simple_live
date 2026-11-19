@@ -1,0 +1,46 @@
+name: build-xposed-module
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "xposed-v*"
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: zulu
+          java-version: "17"
+      - name: Build module apk
+        working-directory: tools/xposed
+        run: |
+          set -e
+          BT=$(ls -d "$ANDROID_SDK_ROOT"/build-tools/* | sort -V | tail -1)
+          PLAT=$(ls -d "$ANDROID_SDK_ROOT"/platforms/android-* | sort -V | tail -1)
+          AJAR="$PLAT/android.jar"
+          echo "BT=$BT"; echo "AJAR=$AJAR"
+          rm -rf build && mkdir -p build/stub build/classes build/dex
+          javac -encoding UTF-8 -source 8 -target 8 -bootclasspath "$AJAR" -d build/stub $(find stubs -name "*.java")
+          jar cf api-stub.jar -C build/stub .
+          javac -encoding UTF-8 -source 8 -target 8 -bootclasspath "$AJAR" -classpath api-stub.jar -d build/classes $(find java -name "*.java")
+          jar cf build/classes.jar -C build/classes .
+          java -cp "$BT/lib/d8.jar" com.android.tools.r8.D8 --release --min-api 24 --lib "$AJAR" --lib api-stub.jar --output build/dex build/classes.jar
+          "$BT/aapt2" compile --dir res -o build/res.zip
+          "$BT/aapt2" link -o build/base.apk -I "$AJAR" --manifest AndroidManifest.xml -R build/res.zip --auto-add-overlay
+          cd build
+          zip -j base.apk dex/classes.dex
+          cp -r ../assets .
+          zip -r base.apk assets > /dev/null
+          keytool -genkeypair -keystore ks.jks -alias k -keyalg RSA -keysize 2048 -validity 10000 -storepass androidpass -keypass androidpass -dname "CN=xposed-module"
+          "$BT/zipalign" -f 4 base.apk aligned.apk
+          "$BT/apksigner" sign --min-sdk-version 24 --ks ks.jks --ks-pass pass:androidpass --key-pass pass:androidpass --out "$GITHUB_WORKSPACE/tools/xposed/didchanger_v1.2cap.apk" aligned.apk
+          "$BT/apksigner" verify --print-certs "$GITHUB_WORKSPACE/tools/xposed/didchanger_v1.2cap.apk" | head -6
+          "$BT/aapt" dump badging "$GITHUB_WORKSPACE/tools/xposed/didchanger_v1.2cap.apk" | head -3
+      - uses: actions/upload-artifact@v4
+        with:
+          name: xposed-module
+          path: tools/xposed/didchanger_v1.2cap.apk
