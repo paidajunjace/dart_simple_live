@@ -122,6 +122,9 @@ mixin PlayerMixin {
       await pp.setProperty('demuxer-max-bytes', '16384KiB');
       await pp.setProperty('demuxer-max-back-bytes', '2MiB');
       await pp.setProperty('network-timeout', '15');
+      // 直播流不可 seek，media_kit 打开时会报 Cannot seek；
+      // 打开 force-seekable 让它降级为普通 seek，日志干净且不影响起播
+      await pp.setProperty('force-seekable', 'yes');
     } else {
       // 虎牙/抖音/B站等：完全保留原版播放器设置与取流节奏，
       // 避免激进缓冲/超时把正常抖动误判成断流导致频繁断连重播
@@ -820,14 +823,41 @@ class PlayerController extends BaseController
     try {
       await applyPlayerPropertiesTo(slot.player);
       await slot.player.open(Media(url, httpHeaders: headers));
+      var ready = false;
       for (var i = 0; i < 32; i++) {
         await Future.delayed(const Duration(milliseconds: 250));
         final w = slot.player.state.width ?? 0;
-        if (w > 0 || slot.player.state.playing) {
+        final h = slot.player.state.height ?? 0;
+        // 必须真出画面：playing 会在只有音频时钟时就为 true，
+        // 那时 width=0/height=null，切过去就是黑屏（2026-11-19 12:56 实测 0xnull）
+        if (w > 0 && h > 0 && slot.player.state.playing) {
+          ready = true;
           Log.d(
-              "备用槽 ${slot.id} 就绪 ${w}x${slot.player.state.height} 耗时${sw.elapsedMilliseconds}ms");
-          return true;
+              "备用槽 ${slot.id} 就绪 ${w}x$h 耗时${sw.elapsedMilliseconds}ms");
+          break;
         }
+      }
+      if (!ready) {
+        Log.d("备用槽 ${slot.id} 8 秒未出画面，放弃");
+        try {
+          await slot.player.stop();
+        } catch (e) {
+          Log.logPrint(e);
+        }
+        return false;
+      }
+      {
+        // 新连接从 CDN 最近关键帧起播，比旧流显示位置早一个 GOP，
+        // 立刻切会「重复几秒前」。让新槽继续播一个 GOP 的时长再切，
+        // 重复窗口就被吃掉（旧槽这段时间照常播，用户看着原画面）。
+        final settle = const Duration(milliseconds: 3500);
+        await Future.delayed(settle);
+        if (!slot.player.state.playing) {
+          Log.d("备用槽 ${slot.id} settle 期间停了，放弃");
+          return false;
+        }
+        Log.d("备用槽 ${slot.id} settle ${settle.inMilliseconds}ms 完成");
+        return true;
       }
       Log.d("备用槽 ${slot.id} 8 秒未出画面，放弃");
       try {
