@@ -24,6 +24,7 @@ import 'package:wakelock_plus/wakelock_plus.dart';
 import 'package:window_manager/window_manager.dart';
 
 mixin PlayerMixin {
+  /// 换实例时会整个换新的 GlobalKey，页面靠它重建 Video 并挂上新纹理
   GlobalKey<VideoState> globalPlayerKey = GlobalKey<VideoState>();
   GlobalKey globalDanmuKey = GlobalKey();
 
@@ -31,35 +32,46 @@ mixin PlayerMixin {
   /// 决定播放器用激进续流参数还是原版参数
   bool douyuLive = false;
 
-  /// 单实例播放。断流恢复走「现签取新地址 + 在原实例上重开」，
-  /// 不再维护备用槽：两套解码器并存是黑屏与事件错乱的来源。
-  late final Player player = Player(
-    configuration: PlayerConfiguration(
-      title: "Simple Live Player",
-      logLevel: AppSettingsController.instance.logEnable.value
-          ? MPVLogLevel.info
-          : MPVLogLevel.error,
-    ),
-  );
+  /// 第几代播放实例。断流恢复会整只换掉 Player 与 VideoController，
+  /// 页面订阅这个计数重建 Video（沿用旧 key 会继续画旧纹理）
+  final RxInt playerGeneration = 0.obs;
 
-  late final VideoController videoController = VideoController(
-    player,
-    configuration: AppSettingsController.instance.customPlayerOutput.value
-        ? VideoControllerConfiguration(
-            vo: AppSettingsController.instance.videoOutputDriver.value,
-            hwdec: AppSettingsController.instance.videoHardwareDecoder.value,
-          )
-        : AppSettingsController.instance.playerCompatMode.value
-            ? const VideoControllerConfiguration(
-                vo: 'mediacodec_embed',
-                hwdec: 'mediacodec',
+  /// 单实例播放，但可整只替换。
+  /// 同实例重开复用 surface，代价是可能继承 mpv 的残留状态；
+  /// 换新实例状态一定干净，代价是纹理重建、黑屏更长。
+  late Player _player = _makePlayer();
+  late VideoController _video = _makeVideo(_player);
+
+  Player get player => _player;
+  VideoController get videoController => _video;
+
+  Player _makePlayer() => Player(
+        configuration: PlayerConfiguration(
+          title: "Simple Live Player",
+          logLevel: AppSettingsController.instance.logEnable.value
+              ? MPVLogLevel.info
+              : MPVLogLevel.error,
+        ),
+      );
+
+  VideoController _makeVideo(Player target) => VideoController(
+        target,
+        configuration: AppSettingsController.instance.customPlayerOutput.value
+            ? VideoControllerConfiguration(
+                vo: AppSettingsController.instance.videoOutputDriver.value,
+                hwdec: AppSettingsController.instance.videoHardwareDecoder.value,
               )
-            : VideoControllerConfiguration(
-                enableHardwareAcceleration:
-                    AppSettingsController.instance.hardwareDecode.value,
-                androidAttachSurfaceAfterVideoParameters: false,
-              ),
-  );
+            : AppSettingsController.instance.playerCompatMode.value
+                ? const VideoControllerConfiguration(
+                    vo: 'mediacodec_embed',
+                    hwdec: 'mediacodec',
+                  )
+                : VideoControllerConfiguration(
+                    enableHardwareAcceleration:
+                        AppSettingsController.instance.hardwareDecode.value,
+                    androidAttachSurfaceAfterVideoParameters: false,
+                  ),
+      );
 
   /// 初始化播放器并设置 ao 参数
   Future<void> initializePlayer() => applyPlayerProperties();
@@ -747,6 +759,34 @@ class PlayerController extends BaseController
       isVertical.value =
           (player.state.height ?? 9) > (player.state.width ?? 16);
     });
+  }
+
+  /// 整只换新播放实例：断流恢复时用来清掉 mpv 的残留状态。
+  /// 顺序是先上新实例、等页面把新 Video 挂好，再销毁旧的，
+  /// 否则页面会短暂用到已销毁的控制器。
+  Future<void> rebuildPlaybackInstance(String why) async {
+    final sw = Stopwatch()..start();
+    final oldPlayer = _player;
+    disposeStream();
+    _player = _makePlayer();
+    _video = _makeVideo(_player);
+    globalPlayerKey = GlobalKey<VideoState>();
+    playerGeneration.value += 1;
+    initStream();
+    await applyPlayerProperties();
+    // 给页面一帧时间挂上新 Video，再收旧实例
+    await Future.delayed(const Duration(milliseconds: 150));
+    try {
+      await oldPlayer.stop().timeout(const Duration(seconds: 2));
+    } catch (e) {
+      Log.d("换新实例：旧实例 stop 未完成(忽略) $e");
+    }
+    try {
+      await oldPlayer.dispose();
+    } catch (e) {
+      Log.logPrint(e);
+    }
+    Log.d("换新实例($why)：新实例就绪 耗时${sw.elapsedMilliseconds}ms");
   }
 
   void disposeStream() {

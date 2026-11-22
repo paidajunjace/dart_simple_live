@@ -30,7 +30,7 @@ class AppSettingsController extends GetxController {
     danmuOpacity.value = LocalStorageService.instance
         .getValue(LocalStorageService.kDanmuOpacity, 1.0);
     danmuArea.value = LocalStorageService.instance
-        .getValue(LocalStorageService.kDanmuArea, 0.8);
+        .getValue(LocalStorageService.kDanmuArea, 0.3);
     danmuSpeed.value = LocalStorageService.instance
         .getValue(LocalStorageService.kDanmuSpeed, 10.0);
     danmuEnable.value = LocalStorageService.instance
@@ -58,9 +58,9 @@ class AppSettingsController extends GetxController {
     );
 
     qualityLevel.value = LocalStorageService.instance
-        .getValue(LocalStorageService.kQualityLevel, 1);
+        .getValue(LocalStorageService.kQualityLevel, 2);
     qualityLevelCellular.value = LocalStorageService.instance
-        .getValue(LocalStorageService.kQualityLevelCellular, 1);
+        .getValue(LocalStorageService.kQualityLevelCellular, 2);
 
     autoExitEnable.value = LocalStorageService.instance
         .getValue(LocalStorageService.kAutoExitEnable, false);
@@ -278,7 +278,7 @@ class AppSettingsController extends GetxController {
     LocalStorageService.instance.setValue(LocalStorageService.kDanmuSpeed, e);
   }
 
-  var danmuArea = 0.8.obs;
+  var danmuArea = 0.3.obs;
   void setDanmuArea(double e) {
     danmuArea.value = e;
     LocalStorageService.instance.setValue(LocalStorageService.kDanmuArea, e);
@@ -310,14 +310,14 @@ class AppSettingsController extends GetxController {
         .setValue(LocalStorageService.kDanmuFontWeight, e);
   }
 
-  var qualityLevel = 1.obs;
+  var qualityLevel = 2.obs;
   void setQualityLevel(int level) {
     qualityLevel.value = level;
     LocalStorageService.instance
         .setValue(LocalStorageService.kQualityLevel, level);
   }
 
-  var qualityLevelCellular = 1.obs;
+  var qualityLevelCellular = 2.obs;
   void setQualityLevelCellular(int level) {
     qualityLevelCellular.value = level;
     LocalStorageService.instance

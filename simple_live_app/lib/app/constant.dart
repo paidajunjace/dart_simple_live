@@ -5,16 +5,17 @@ class Constant {
   static const String kUpdateFollow = "UpdateFollow";
   static const String kUpdateHistory = "UpdateHistory";
 
+  /// 顺序即底部导航的默认顺序：关注、首页、分类、我的
   static final Map<String, HomePageItem> allHomePages = {
-    "recommend": HomePageItem(
-      iconData: Remix.home_smile_line,
-      title: "首页",
-      index: 0,
-    ),
     "follow": HomePageItem(
       iconData: Remix.heart_line,
       title: "关注",
       index: 1,
+    ),
+    "recommend": HomePageItem(
+      iconData: Remix.home_smile_line,
+      title: "首页",
+      index: 0,
     ),
     "category": HomePageItem(
       iconData: Remix.apps_line,

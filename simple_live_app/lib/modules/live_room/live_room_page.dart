@@ -256,21 +256,26 @@ class LiveRoomPage extends GetView<LiveRoomController> {
     }
     return Stack(
       children: [
-        Video(
-          key: controller.globalPlayerKey,
-          controller: controller.videoController,
-          pauseUponEnteringBackgroundMode:
-              AppSettingsController.instance.playerAutoPause.value,
-          resumeUponEnteringForegroundMode:
-              AppSettingsController.instance.playerAutoPause.value,
-          controls: (state) {
-            return playerControls(state, controller);
-          },
-          aspectRatio: aspectRatio,
-          fit: boxFit,
-          // 自己实现
-          wakelock: false,
-        ),
+        // 换新实例时 playerGeneration 自增，这里随之一并重建 Video，
+        // 保证画面上挂的是新实例的纹理（沿用旧 key 会继续画旧纹理）
+        Obx(() {
+          controller.playerGeneration.value;
+          return Video(
+            key: controller.globalPlayerKey,
+            controller: controller.videoController,
+            pauseUponEnteringBackgroundMode:
+                AppSettingsController.instance.playerAutoPause.value,
+            resumeUponEnteringForegroundMode:
+                AppSettingsController.instance.playerAutoPause.value,
+            controls: (state) {
+              return playerControls(state, controller);
+            },
+            aspectRatio: aspectRatio,
+            fit: boxFit,
+            // 自己实现
+            wakelock: false,
+          );
+        }),
         // 续流占位帧：换源/断流恢复期间盖住黑屏，首帧回来即撤（黑屏修复）
         Obx(
           () {

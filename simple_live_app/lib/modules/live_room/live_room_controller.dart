@@ -403,7 +403,9 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
     return qualityLevel;
   }
 
-  Future<bool> getPlayUrl() async {
+  /// [renew] 为真时整只换新播放实例再取流（断流恢复用），
+  /// 为假时在原实例上重开（首播、切清晰度用）
+  Future<bool> getPlayUrl({bool renew = false}) async {
     try {
       playUrls.clear();
       currentQualityInfo.value = qualites[currentQuality].quality;
@@ -413,6 +415,11 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
       // 实测：同一地址重连会在 1 秒内被 CDN 掐断（6 个样本 / 2 个 CDN），
       // 因此必须换新地址；但 player.stop() 会拆掉解码会话，是黑屏与
       // 「必须手动刷新」的主因，所以只在取地址失败时才降级为关播放器重试。
+      if (renew) {
+        // 先抓当前画面遮黑，再把播放器整只换新：mpv 可能留着上一次的残留状态
+        await _captureHoldFrame();
+        await rebuildPlaybackInstance("断流恢复");
+      }
       var playUrl = await site.liveSite.getPlayUrls(
           detail: detail.value!, quality: qualites[currentQuality]);
       if (playUrl.urls.isEmpty && site.id == Constant.kDouyu) {
@@ -641,7 +648,7 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
                 const Duration(seconds: 30)) {
           _lastUrlRefreshAt = DateTime.now();
           Log.d("非斗鱼平台：播放中断($from)，刷新地址重开");
-          final ok = await getPlayUrl();
+          final ok = await getPlayUrl(renew: true);
           if (ok) {
             return;
           }
@@ -681,7 +688,7 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
       if (mediaRefreshCount < 4) {
         mediaRefreshCount += 1;
         Log.d("播放中断($from)，刷新地址重开，第${mediaRefreshCount}次");
-        final ok = await getPlayUrl();
+        final ok = await getPlayUrl(renew: true);
         if (!ok) {
           // 取地址失败（限频/网络抖动）：5 秒后重试，别让恢复链断头
           _scheduleRecoveryRetry();
@@ -759,7 +766,7 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
         mediaErrorRetryCount = 0;
         await Future.delayed(const Duration(seconds: 5));
         mediaRefreshCount = 0;
-        final ok = await getPlayUrl();
+        final ok = await getPlayUrl(renew: true);
         if (!ok) {
           _scheduleRecoveryRetry();
         }
@@ -845,7 +852,7 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
       // 不加锁会再拉起一条并行的恢复链
       _recovering = true;
       _lastRecoverAt = DateTime.now();
-      final opened = await getPlayUrl();
+      final opened = await getPlayUrl(renew: true);
       _recovering = false;
       if (!opened) {
         // 取地址失败：旧流必在 300s 被掐，立即进恢复链
