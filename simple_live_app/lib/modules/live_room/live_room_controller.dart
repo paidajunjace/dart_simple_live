@@ -576,47 +576,6 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
     }
   }
 
-  /// 无缝换源：备用槽先连上新地址并出画面，再切显示层。
-  /// 旧做法是直接在播着的实例上 open()，mpv 拆解码器 → 黑 1~3 秒，
-  /// 所以观感是「黑一下再刷新」。这里全程不动正在播的画面。
-  Future<bool> seamlessRenew() async {
-    // 全平台可用：虎牙网页版也是「原地重连 + 换签名」，我们这边等价物就是备用槽
-    if (detail.value == null) {
-      return false;
-    }
-    try {
-      final playUrl = await site.liveSite.getPlayUrls(
-          detail: detail.value!, quality: qualites[currentQuality]);
-      if (playUrl.urls.isEmpty) {
-        Log.d("无缝换源：取地址为空，退回重开播放器");
-        return false;
-      }
-      playUrls.value = playUrl.urls;
-      playHeaders = playUrl.headers;
-      currentLineIndex = 0;
-      currentLineInfo.value = "线路1";
-      var url = playUrl.urls.first;
-      if (AppSettingsController.instance.playerForceHttps.value) {
-        url = url.replaceAll("http://", "https://");
-      }
-      douyuLive = site.id == Constant.kDouyu;
-      final ready = await warmUpSlot(url, playHeaders);
-      if (!ready) {
-        return false;
-      }
-      await promoteInactiveSlot();
-      mediaRefreshCount = 0;
-      mediaErrorRetryCount = 0;
-      startStallWatchdog();
-      scheduleProactiveRefresh();
-      Log.d("无缝换源完成：备用槽已接管");
-      return true;
-    } catch (e) {
-      Log.logPrint(e);
-      return false;
-    }
-  }
-
   Future<void> setPlayer() async {
     currentLineInfo.value = "线路${currentLineIndex + 1}";
     errorMsg.value = "";
@@ -681,10 +640,7 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
             DateTime.now().difference(_lastUrlRefreshAt) >
                 const Duration(seconds: 30)) {
           _lastUrlRefreshAt = DateTime.now();
-          Log.d("非斗鱼平台：播放中断($from)，先无缝换源");
-          if (await seamlessRenew()) {
-            return;
-          }
+          Log.d("非斗鱼平台：播放中断($from)，刷新地址重开");
           final ok = await getPlayUrl();
           if (ok) {
             return;
@@ -724,12 +680,7 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
       }
       if (mediaRefreshCount < 4) {
         mediaRefreshCount += 1;
-        Log.d("播放中断($from)，无缝换源，第${mediaRefreshCount}次");
-        final seamless = await seamlessRenew();
-        if (seamless) {
-          return;
-        }
-        Log.d("播放中断($from)，无缝换源失败，退回重开播放器");
+        Log.d("播放中断($from)，刷新地址重开，第${mediaRefreshCount}次");
         final ok = await getPlayUrl();
         if (!ok) {
           // 取地址失败（限频/网络抖动）：5 秒后重试，别让恢复链断头
@@ -894,20 +845,13 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
       // 不加锁会再拉起一条并行的恢复链
       _recovering = true;
       _lastRecoverAt = DateTime.now();
-      seamlessRenew().then((ok) async {
-        if (ok) {
-          _recovering = false;
-          return;
-        }
-        Log.d("无缝换源未生效，退回重开播放器");
-        final opened = await getPlayUrl();
-        _recovering = false;
-        if (!opened) {
-          // 两条路都失败：旧流必在 300s 被掐，立即进恢复链
-          Log.d("主动重签未生效，转入恢复链");
-          recoverPlayback("proactivefail");
-        }
-      });
+      final opened = await getPlayUrl();
+      _recovering = false;
+      if (!opened) {
+        // 取地址失败：旧流必在 300s 被掐，立即进恢复链
+        Log.d("主动重签未生效，转入恢复链");
+        recoverPlayback("proactivefail");
+      }
     });
   }
 

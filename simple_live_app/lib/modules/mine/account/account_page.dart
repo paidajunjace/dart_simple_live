@@ -5,7 +5,6 @@ import 'package:simple_live_app/modules/mine/account/account_controller.dart';
 import 'package:simple_live_app/services/bilibili_account_service.dart';
 import 'package:simple_live_app/services/douyin_account_service.dart';
 import 'package:simple_live_app/services/douyu_account_service.dart';
-import 'package:simple_live_app/services/douyu_cookie_secret.dart';
 
 class AccountPage extends GetView<AccountController> {
   const AccountPage({Key? key}) : super(key: key);
@@ -49,9 +48,7 @@ class AccountPage extends GetView<AccountController> {
               ),
               title: const Text("斗鱼直播"),
               subtitle: Text(DouyuAccountService.instance.hasCookie.value
-                  ? (DouyuAccountService.instance.cookie == kPrefilledDouyuCookie
-                      ? "已使用本机预置登录态"
-                      : "已导入登录Cookie（${DouyuAccountService.instance.cookie.length} 字符）")
+                  ? "已导入登录Cookie（${DouyuAccountService.instance.cookie.length} 字符）"
                   : "粘贴浏览器登录Cookie"),
               trailing: DouyuAccountService.instance.hasCookie.value
                   ? const Icon(Icons.delete_outline)

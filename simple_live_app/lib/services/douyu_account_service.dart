@@ -1,7 +1,6 @@
 import 'package:get/get.dart';
 import 'package:simple_live_app/app/constant.dart';
 import 'package:simple_live_app/app/sites.dart';
-import 'package:simple_live_app/services/douyu_cookie_secret.dart';
 import 'package:simple_live_app/services/local_storage_service.dart';
 import 'package:simple_live_core/simple_live_core.dart';
 
@@ -14,12 +13,10 @@ class DouyuAccountService extends GetxService {
 
   @override
   void onInit() {
-    final bool cleared = LocalStorageService.instance
-        .getValue(LocalStorageService.kDouyuCookieCleared, false);
+    // 不随包预置任何登录态：默认匿名观看，Cookie 只能由用户自己导入。
+    // （旧实现由 CI 从 Secret 注入一份真实登录 Cookie，等于让所有装包的人共用一个账号）
     cookie = LocalStorageService.instance
         .getValue(LocalStorageService.kDouyuCookie, "");
-    // 首次安装未手动设置且未主动清除时，使用本地预置的私人登录 Cookie，使安装即可用
-    if (!cleared && cookie.isEmpty) cookie = kPrefilledDouyuCookie;
     hasCookie.value = cookie.isNotEmpty;
     setSite();
     super.onInit();

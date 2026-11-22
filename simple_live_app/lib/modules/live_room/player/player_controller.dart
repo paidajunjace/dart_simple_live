@@ -25,86 +25,47 @@ import 'package:window_manager/window_manager.dart';
 
 mixin PlayerMixin {
   GlobalKey<VideoState> globalPlayerKey = GlobalKey<VideoState>();
-
-  /// 备用槽的画面 key。无缝换源时两层 Video 同时存在，GlobalKey 不能共用
-  GlobalKey<VideoState> warmPlayerKey = GlobalKey<VideoState>();
-
-  /// 播放实例槽：Player 与 VideoController 必须成对替换，拆开就是黑屏。
-  /// 无缝换源的做法是让备用槽先连上、先出画面，再切显示层，全程不动当前画面。
-  PlaybackSlot? _slotA;
-  final Rx<PlaybackSlot?> _slotBRx = Rx<PlaybackSlot?>(null);
-
-  /// 当前显示哪个槽：0=A 1=B。页面按它选层，控件与事件订阅跟着它走
-  final RxInt activeSlotId = 0.obs;
-
-  PlaybackSlot get slotA => _slotA ??= _createSlot(0);
-  PlaybackSlot? get slotB => _slotBRx.value;
-
-  PlaybackSlot get activeSlot =>
-      (activeSlotId.value == 1 && slotB != null) ? slotB! : slotA;
-
-  /// 不在显示的那个槽，不存在就现建（建好立刻进页面，才能先解出画面）
-  PlaybackSlot get inactiveSlot {
-    if (activeSlotId.value == 1) {
-      return slotA;
-    }
-    final b = _slotBRx.value;
-    if (b != null) {
-      return b;
-    }
-    final created = _createSlot(1);
-    _slotBRx.value = created;
-    return created;
-  }
-
-  PlaybackSlot _createSlot(int id) {
-    final p = Player(
-      configuration: PlayerConfiguration(
-        title: "Simple Live Player",
-        logLevel: AppSettingsController.instance.logEnable.value
-            ? MPVLogLevel.info
-            : MPVLogLevel.error,
-      ),
-    );
-    final v = VideoController(
-      p,
-      configuration: AppSettingsController.instance.customPlayerOutput.value
-          ? VideoControllerConfiguration(
-              vo: AppSettingsController.instance.videoOutputDriver.value,
-              hwdec: AppSettingsController.instance.videoHardwareDecoder.value,
-            )
-          : AppSettingsController.instance.playerCompatMode.value
-              ? const VideoControllerConfiguration(
-                  vo: 'mediacodec_embed',
-                  hwdec: 'mediacodec',
-                )
-              : VideoControllerConfiguration(
-                  enableHardwareAcceleration:
-                      AppSettingsController.instance.hardwareDecode.value,
-                  androidAttachSurfaceAfterVideoParameters: false,
-                ),
-    );
-    Log.d("播放槽 $id 已创建");
-    return PlaybackSlot(id: id, player: p, video: v);
-  }
-
-  /// 全局入口：所有既有调用点仍然写 player.xxx / videoController，靠 getter 转发
-  Player get player => activeSlot.player;
-  VideoController get videoController => activeSlot.video;
   GlobalKey globalDanmuKey = GlobalKey();
 
   /// 斗鱼标志：由 live_room_controller 在开播前设置，
   /// 决定播放器用激进续流参数还是原版参数
   bool douyuLive = false;
 
+  /// 单实例播放。断流恢复走「现签取新地址 + 在原实例上重开」，
+  /// 不再维护备用槽：两套解码器并存是黑屏与事件错乱的来源。
+  late final Player player = Player(
+    configuration: PlayerConfiguration(
+      title: "Simple Live Player",
+      logLevel: AppSettingsController.instance.logEnable.value
+          ? MPVLogLevel.info
+          : MPVLogLevel.error,
+    ),
+  );
 
-  /// 初始化当前播放器并设置 ao 参数
-  Future<void> initializePlayer() => applyPlayerPropertiesTo(player);
+  late final VideoController videoController = VideoController(
+    player,
+    configuration: AppSettingsController.instance.customPlayerOutput.value
+        ? VideoControllerConfiguration(
+            vo: AppSettingsController.instance.videoOutputDriver.value,
+            hwdec: AppSettingsController.instance.videoHardwareDecoder.value,
+          )
+        : AppSettingsController.instance.playerCompatMode.value
+            ? const VideoControllerConfiguration(
+                vo: 'mediacodec_embed',
+                hwdec: 'mediacodec',
+              )
+            : VideoControllerConfiguration(
+                enableHardwareAcceleration:
+                    AppSettingsController.instance.hardwareDecode.value,
+                androidAttachSurfaceAfterVideoParameters: false,
+              ),
+  );
 
-  /// 把播放参数打到指定实例上（主槽与备用槽都要，缺一个就会出现两套行为）
-  Future<void> applyPlayerPropertiesTo(Player target) async {
-    var pp = target.platform as NativePlayer;
-    // 设置音频输出驱动
+  /// 初始化播放器并设置 ao 参数
+  Future<void> initializePlayer() => applyPlayerProperties();
+
+  Future<void> applyPlayerProperties() async {
+    var pp = player.platform as NativePlayer;
     if (AppSettingsController.instance.customPlayerOutput.value) {
       if (player.platform is NativePlayer) {
         await (player.platform as dynamic).setProperty(
@@ -115,9 +76,7 @@ mixin PlayerMixin {
     }
     if (douyuLive) {
       // 延迟对齐网页版：readahead 越大，播放位置离直播边缘越远，
-      // 换源时新流从边缘起播，画面就向前跳这么多秒，观感就是割裂。
-      // 空窗已经不用长缓冲硬顶（占位帧 + 备用槽切层），所以降到 4 秒：
-      // 够扛抖动，把延迟和跳变一起压到网页版量级。
+      // 刷新地址重开时画面会向前跳这么多秒，观感就是割裂。
       await pp.setProperty('demuxer-readahead-secs', '4');
       await pp.setProperty('demuxer-max-bytes', '16384KiB');
       await pp.setProperty('demuxer-max-back-bytes', '2MiB');
@@ -126,7 +85,7 @@ mixin PlayerMixin {
       // 打开 force-seekable 让它降级为普通 seek，日志干净且不影响起播
       await pp.setProperty('force-seekable', 'yes');
     } else {
-      // 虎牙/抖音/B站等：完全保留原版播放器设置与取流节奏，
+      // 虎牙/抖音/B站等：保留原版播放器设置与取流节奏，
       // 避免激进缓冲/超时把正常抖动误判成断流导致频繁断连重播
       if (Platform.isAndroid) {
         await pp.setProperty('force-seekable', 'yes');
@@ -134,24 +93,12 @@ mixin PlayerMixin {
       await pp.setProperty('demuxer-readahead-secs', '10');
       await pp.setProperty('cache', 'yes');
       await pp.setProperty('cache-secs', '20');
-      // 连接层自愈：断流时由 ffmpeg 原地重连同一地址，
-      // 避免上层重建播放器造成画面重刷（虎牙地址实测可复用）
-      // 去掉 reconnect_at_eof：它可能吞掉 EOF，令 completed 事件不再触发，
-      // 从而让 mediaEnd() 与下播判定失效（云端审查 E6 指出）。
+      // 连接层自愈：断流时由 ffmpeg 原地重连同一地址，能自己续上就不重建播放器
+      // 不开 reconnect_at_eof：它可能吞掉 EOF，令 completed 事件不再触发
       await pp.setProperty('stream-lavf-o',
           'reconnect=1,reconnect_streamed=1,reconnect_delay_max=5');
     }
   }
-
-}
-
-/// 一个播放实例：Player 与 VideoController 成对出现，替换时必须整对换
-class PlaybackSlot {
-  PlaybackSlot({required this.id, required this.player, required this.video});
-
-  final int id;
-  final Player player;
-  final VideoController video;
 }
 
 mixin PlayerStateMixin on PlayerMixin {
@@ -259,13 +206,10 @@ mixin PlayerStateMixin on PlayerMixin {
       boxFit = BoxFit.contain;
       aspectRatio = 4 / 3;
     }
-    // 两个槽各自有 State，谁的画面在显示就都要跟着设置走
-    for (final key in [globalPlayerKey, warmPlayerKey]) {
-      key.currentState?.update(
-        aspectRatio: aspectRatio,
-        fit: boxFit,
-      );
-    }
+    globalPlayerKey.currentState?.update(
+      aspectRatio: aspectRatio,
+      fit: boxFit,
+    );
   }
 }
 mixin PlayerDanmakuMixin on PlayerStateMixin {
@@ -815,166 +759,6 @@ class PlayerController extends BaseController
     _playingSubscription?.cancel();
   }
 
-  /// 备用槽预热：连上新地址并等到出画面，全程不动当前正在播的槽。
-  /// 返回 true 表示已就绪，可以切层；false 表示这次只能走老办法重开。
-  Future<bool> warmUpSlot(String url, Map<String, String>? headers) async {
-    final slot = inactiveSlot;
-    final sw = Stopwatch()..start();
-    try {
-      await applyPlayerPropertiesTo(slot.player);
-      await slot.player.open(Media(url, httpHeaders: headers));
-      // 新实例默认 100%，切过去会突然变响；跟用户设置对齐
-      await slot.player
-          .setVolume(AppSettingsController.instance.playerVolume.value);
-      var ready = false;
-      for (var i = 0; i < 32; i++) {
-        await Future.delayed(const Duration(milliseconds: 250));
-        final w = slot.player.state.width ?? 0;
-        final h = slot.player.state.height ?? 0;
-        // 必须真出画面：playing 会在只有音频时钟时就为 true，
-        // 那时 width=0/height=null，切过去就是黑屏（2026-11-19 12:56 实测 0xnull）
-        if (w > 0 && h > 0 && slot.player.state.playing) {
-          ready = true;
-          Log.d(
-              "备用槽 ${slot.id} 就绪 ${w}x$h 耗时${sw.elapsedMilliseconds}ms");
-          break;
-        }
-      }
-      if (!ready) {
-        Log.d("备用槽 ${slot.id} 8 秒未出画面，放弃");
-        try {
-          await slot.player.stop();
-        } catch (e) {
-          Log.logPrint(e);
-        }
-        return false;
-      }
-      {
-        // 备用槽这段时间要出声就会双声道，先静音
-        try {
-          await slot.player.setVolume(0);
-        } catch (e) {
-          Log.logPrint(e);
-        }
-        // 对齐：新连接从最近关键帧起播，位置比旧流当前画面靠前。
-        // 读两槽的 video-pts，若同一条时间轴就等新槽追平旧槽再切，
-        // 否则退回经验值（一个 GOP 的一半），把重复窗口压到最小。
-        final aligned = await _alignWarmSlot(slot);
-        if (!aligned) {
-          Log.d("备用槽 ${slot.id} 对齐期间停了，放弃");
-          return false;
-        }
-        return true;
-      }
-      Log.d("备用槽 ${slot.id} 8 秒未出画面，放弃");
-      try {
-        await slot.player.stop();
-      } catch (e) {
-        Log.logPrint(e);
-      }
-      return false;
-    } catch (e) {
-      Log.logPrint(e);
-      return false;
-    }
-  }
-
-  /// 读 mpv 的 video-pts（秒）。两槽若在同一条时间轴上，直接可比
-  Future<double?> _readPts(Player target) async {
-    try {
-      final raw =
-          await (target.platform as NativePlayer).getProperty('video-pts');
-      return double.tryParse(raw ?? '');
-    } catch (e) {
-      return null;
-    }
-  }
-
-  /// 把备用槽对齐到当前槽的播放位置，返回是否仍然在播
-  Future<bool> _alignWarmSlot(PlaybackSlot slot) async {
-    final oldPts = await _readPts(player);
-    final newPts = await _readPts(slot.player);
-    final comparable = oldPts != null &&
-        newPts != null &&
-        (newPts - oldPts).abs() < 600 &&
-        newPts <= oldPts + 600;
-    if (!comparable) {
-      // 时间轴不可比（或新槽已经更靠前）：只等半个 GOP 的经验值
-      Log.d("对齐：pts 不可比（新$newPts 旧$oldPts），等 1200ms");
-      await Future.delayed(const Duration(milliseconds: 1200));
-      return slot.player.state.playing;
-    }
-    final sw = Stopwatch()..start();
-    while (sw.elapsedMilliseconds < 6000) {
-      final o = await _readPts(player);
-      final n = await _readPts(slot.player);
-      if (o == null || n == null) {
-        Log.d("对齐：pts 读取中断，按 800ms 兜底");
-        await Future.delayed(const Duration(milliseconds: 800));
-        break;
-      }
-      if (n >= o) {
-        Log.d("对齐：新槽追平（新$n 旧$o）用时${sw.elapsedMilliseconds}ms");
-        break;
-      }
-      await Future.delayed(const Duration(milliseconds: 200));
-    }
-    if (sw.elapsedMilliseconds >= 6000) {
-      Log.d("对齐：6 秒未追平，按超时切");
-    }
-    return slot.player.state.playing;
-  }
-
-  /// 切到备用槽：新槽已经有画面，切层不出黑。
-  /// 旧槽保留 3 秒再暂停，切过去若有问题还能退回来
-  Future<void> promoteInactiveSlot() async {
-    final warm = inactiveSlot;
-    final old = activeSlot;
-    if (identical(warm, old)) {
-      return;
-    }
-    // 先静音旧槽再切：两路同时出画面时就是两个声音，用户听得出
-    try {
-      await old.player.setVolume(0);
-    } catch (e) {
-      Log.logPrint(e);
-    }
-    activeSlotId.value = warm.id;
-    // 事件订阅原本绑在旧槽上，换槽必须重绑，否则播放事件全断
-    disposeStream();
-    initStream();
-    try {
-      await player
-          .setVolume(AppSettingsController.instance.playerVolume.value);
-    } catch (e) {
-      Log.logPrint(e);
-    }
-    Log.d("已切到备用槽 ${warm.id}");
-    // 立刻停旧槽。以前留 3 秒退路，代价是 3 秒双声道
-    try {
-      await old.player.pause();
-    } catch (e) {
-      Log.logPrint(e);
-    }
-    await Future<void>.delayed(const Duration(milliseconds: 1500));
-    if (!player.state.playing) {
-      // 新槽没接住，退回旧槽并把音量还回去
-      Log.d("新槽切后 1.5s 未播，回退旧槽");
-      try {
-        await warm.player.pause();
-        await old.player
-            .setVolume(AppSettingsController.instance.playerVolume.value);
-        await old.player.play();
-      } catch (e) {
-        Log.logPrint(e);
-      }
-      activeSlotId.value = old.id;
-      disposeStream();
-      initStream();
-      return;
-    }
-    Log.d("备用槽 ${warm.id} 接管确认");
-  }
 
   void mediaEnd() {
     WakelockPlus.disable();
@@ -1113,9 +897,7 @@ class PlayerController extends BaseController
     disposeStream();
     disposeDanmakuController();
     await resetSystem();
-    // 两个槽都要收，只收当前槽会留下一个在后台解码
-    await _slotA?.player.dispose();
-    await slotB?.player.dispose();
+    await player.dispose();
     super.onClose();
   }
 }

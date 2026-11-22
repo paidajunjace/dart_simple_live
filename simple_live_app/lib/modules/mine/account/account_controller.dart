@@ -8,7 +8,6 @@ import 'package:simple_live_app/routes/route_path.dart';
 import 'package:simple_live_app/services/bilibili_account_service.dart';
 import 'package:simple_live_app/services/douyin_account_service.dart';
 import 'package:simple_live_app/services/douyu_account_service.dart';
-import 'package:simple_live_app/services/douyu_cookie_secret.dart';
 import 'package:simple_live_core/simple_live_core.dart';
 
 class AccountController extends GetxController {
@@ -170,10 +169,9 @@ class AccountController extends GetxController {
 
   void douyuTap() async {
     if (DouyuAccountService.instance.hasCookie.value) {
-      // 已有登录态（含安装包预置）：提供 清除/重新登录/手动粘贴 三个入口
-      var source = DouyuAccountService.instance.cookie == kPrefilledDouyuCookie
-          ? "安装包预置的登录 Cookie"
-          : "已导入的登录 Cookie（${DouyuAccountService.instance.cookie.length} 字符）";
+      // 已有登录态：提供 清除/重新登录/手动粘贴 三个入口
+      var source =
+          "已导入的登录 Cookie（${DouyuAccountService.instance.cookie.length} 字符）";
       var mode = await Get.dialog<String>(
         AlertDialog(
           title: const Text("斗鱼登录状态"),

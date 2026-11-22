@@ -1,0 +1,39 @@
+name: flutter-analyze
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - "fix/**"
+    paths:
+      - "simple_live_app/**.dart"
+      - "simple_live_core/**.dart"
+      - ".github/workflows/flutter-analyze.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  analyze:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: "3.38.x"
+          cache: true
+
+      - name: Pub get (app)
+        working-directory: simple_live_app
+        run: flutter pub get
+
+      # 只当门禁用：把 error 级别超过 0 当成失败，warning/info 不影响
+      - name: Analyze (app)
+        working-directory: simple_live_app
+        run: |
+          flutter analyze --no-pub > /tmp/analyze.txt 2>&1 || true
+          grep -E "error •" /tmp/analyze.txt && echo "=== 有 error，失败 ===" && exit 1
+          tail -3 /tmp/analyze.txt
+          echo "=== 无 error ==="
