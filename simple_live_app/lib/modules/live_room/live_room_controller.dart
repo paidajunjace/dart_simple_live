@@ -830,7 +830,7 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
     if (site.id != Constant.kDouyu) {
       return;
     }
-    _proactiveRefreshTimer = Timer(const Duration(seconds: 270), () {
+    _proactiveRefreshTimer = Timer(const Duration(seconds: 270), () async {
       if (_closed || !Get.isRegistered<LiveRoomController>()) {
         return;
       }
