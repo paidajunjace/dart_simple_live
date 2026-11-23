@@ -37,8 +37,7 @@ jobs:
       - name: Report output
         working-directory: simple_live_app
         shell: pwsh
-        run: |
-          Get-ChildItem -Recurse build\windows\x64\runner\Release | Select-Object FullName,Length | Format-Table -AutoSize
+        run: Get-ChildItem -Recurse build/windows/x64/runner/Release | Select-Object FullName,Length | Format-Table -AutoSize
 
       - name: Upload Windows build
         uses: actions/upload-artifact@v4
