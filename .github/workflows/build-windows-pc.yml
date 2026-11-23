@@ -1,0 +1,48 @@
+name: build-windows-pc
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - "build/**"
+
+permissions:
+  contents: read
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: "3.38.x"
+          channel: stable
+          cache: true
+
+      - name: Enable Windows desktop
+        run: flutter config --enable-windows-desktop
+
+      - name: Flutter pub get
+        working-directory: simple_live_app
+        run: flutter pub get
+
+      - name: Build Windows release
+        working-directory: simple_live_app
+        run: flutter build windows --release
+
+      - name: Report output
+        working-directory: simple_live_app
+        shell: pwsh
+        run: |
+          Get-ChildItem -Recurse build\windows\x64\runner\Release | Select-Object FullName,Length | Format-Table -AutoSize
+
+      - name: Upload Windows build
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-pc
+          path: simple_live_app/build/windows/x64/runner/Release/
+          if-no-files-found: error
