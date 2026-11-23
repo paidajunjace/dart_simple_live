@@ -1,4 +1,5 @@
 name: build-windows-pc
+# PC (Windows desktop) build for local testing
 
 on:
   workflow_dispatch:
