@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:remixicon/remixicon.dart';
 
 class Constant {
+  // ci-probe 2026-11-25: 只为确认 push 是否还能触发工作流
   static const String kUpdateFollow = "UpdateFollow";
   static const String kUpdateHistory = "UpdateHistory";
 
