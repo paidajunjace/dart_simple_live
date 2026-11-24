@@ -5,6 +5,8 @@ on:
   push:
     branches:
       - "fix/**"
+    tags:
+      - "douyu-v*"
 
 permissions:
   contents: read
