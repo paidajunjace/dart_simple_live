@@ -1,0 +1,38 @@
+name: build-windows
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "douyu-v*"
+
+permissions:
+  contents: read
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: "3.38.x"
+          cache: true
+
+      - name: Pub get (app)
+        working-directory: simple_live_app
+        run: flutter pub get
+
+      # 桌面端产物是一条 Release 目录（exe + dll + data），整体打包上传
+      - name: Build Windows (release)
+        working-directory: simple_live_app
+        run: flutter build windows --release
+
+      - name: Upload Windows bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: simple-live-windows
+          path: simple_live_app/build/windows/x64/runner/Release
+          if-no-files-found: error
