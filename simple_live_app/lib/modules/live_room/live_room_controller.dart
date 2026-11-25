@@ -1391,6 +1391,10 @@ ${error?.stackTrace}''');
     if (state == AppLifecycleState.resumed) {
       Log.d("返回前台");
       isBackground = false;
+      // canvas_danmaku 0.2.7 在 didChangeAppLifecycleState 里只处理 paused 调 pause()，
+      // 回到前台它自己不会 resume，动画与计时器就停在那儿，表现为弹幕不再滚动。
+      // 这里补一下恢复，缺了它滚屏就失效。
+      danmakuController?.resume();
     }
   }
 
