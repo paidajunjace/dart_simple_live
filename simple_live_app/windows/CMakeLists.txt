@@ -32,6 +32,11 @@ set(CMAKE_CXX_FLAGS_PROFILE "${CMAKE_CXX_FLAGS_RELEASE}")
 # Use Unicode for all projects.
 add_definitions(-DUNICODE -D_UNICODE)
 
+# 新版 MSVC 把 <experimental/coroutine> 的弃用从警告升成 static_assert 硬错误，
+# 而 flutter_inappwebview_windows 仍在用它。这里用全局 CXX 旗标下发，
+# 因为插件的 CMakeLists 不一定会走 apply_standard_settings（实测那样没生效）。
+string(APPEND CMAKE_CXX_FLAGS " /D_SILENCE_EXPERIMENTAL_COROUTINE_DEPRECATION_WARNINGS")
+
 # Compilation settings that should be applied to most targets.
 #
 # Be cautious about adding new options here, as plugins use this function by
